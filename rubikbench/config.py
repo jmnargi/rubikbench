@@ -40,7 +40,10 @@ class BenchmarkConfig:
     extra_body: dict[str, Any] = field(default_factory=dict)
     #: Convenience field merged into ``extra_body`` under ``reasoning_effort``.
     reasoning_effort: str | None = None
-    #: Cap on generated tokens per reply, sent in the request body as ``max_tokens``.
+    #: Optional prompt-cache retention request, merged as ``prompt_cache_retention``
+    #: (seconds). Cached-token usage is always recorded when the server reports it.
+    cache_retention: int | None = None
+    #: Output token cap forwarded as ``max_tokens`` in the request body.
     max_output_tokens: int | None = None
     #: Approximate cap on the request context (tokens). Older conversation turns
     #: are trimmed to stay below this value; ``None`` disables trimming.
@@ -94,6 +97,8 @@ class BenchmarkConfig:
             raise ValueError("seed must be a non-negative integer or null")
         if self.max_input_tokens is not None and self.max_input_tokens < 1:
             raise ValueError("max_input_tokens must be >= 1 or null")
+        if self.cache_retention is not None and self.cache_retention < 1:
+            raise ValueError("cache_retention must be >= 1 or null")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be >= 1 or null")
         from .scramble import PREMADE_SCRAMBLES
@@ -130,6 +135,8 @@ class BenchmarkConfig:
         body = dict(self.extra_body or {})
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
+        if self.cache_retention:
+            body["prompt_cache_retention"] = self.cache_retention
         if self.max_output_tokens:
             body["max_tokens"] = self.max_output_tokens
         return body

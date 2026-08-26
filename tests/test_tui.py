@@ -42,6 +42,7 @@ async def test_full_flow_through_tui(mock, tmp_path):
         # exercise the token cap fields through the form
         app.screen.query_one("#max_output_tokens", Input).value = "512"
         app.screen.query_one("#max_input_tokens", Input).value = "4096"
+        app.screen.query_one("#cache_retention", Input).value = "3600"
         app.screen.query_one("#scramble_preset", Select).value = "superflip"
         await pilot.click("#start_btn")
 
@@ -49,11 +50,13 @@ async def test_full_flow_through_tui(mock, tmp_path):
         assert saved["model"] == "mock"
         assert saved["max_output_tokens"] == 512
         assert saved["max_input_tokens"] == 4096
+        assert saved["cache_retention"] == 3600
         assert saved["scramble_preset"] == "superflip"
         from rubikbench.scramble import PREMADE_SCRAMBLES
 
         assert app.result.solves[0].scramble == PREMADE_SCRAMBLES["superflip"][0].split()
         assert server.seen_bodies[0]["max_tokens"] == 512
+        assert server.seen_bodies[0]["prompt_cache_retention"] == 3600
 
         # results table populated
         results = app.screen
@@ -116,3 +119,45 @@ async def test_results_screen_for_empty_run(mock):
             assert table.row_count == 1  # placeholder "—" row for empty runs
     finally:
         path.unlink(missing_ok=True)
+async def test_replay_screen_steps_and_plays(mock, tmp_path):
+    """Replay screen walks a real solve's timeline and toggles playback."""
+    from textual.widgets import Button, OptionList, Select
+
+    from rubikbench.benchmark import BenchmarkResult, run_solve
+    from rubikbench.llm import OpenAICompatibleClient
+    from rubikbench.scramble import PREMADE_SCRAMBLES
+    from rubikbench.tui.replay_screen import ReplayScreen
+
+    _, url = mock
+    scramble = PREMADE_SCRAMBLES["catalog-10"][0].split()
+    cfg = BenchmarkConfig(base_url=url, model="mock", num_solves=2, max_turns=15, seed=5)
+    client = OpenAICompatibleClient(base_url=url, api_key="k", model="mock", max_retries=0)
+    s0 = run_solve(0, scramble, cfg, client)
+    s1 = run_solve(1, scramble, cfg, client)
+    result = BenchmarkResult(config=cfg, solves=[s0, s1], started_at_iso="now", duration=1.0)
+
+    app = RubikBenchApp(config_path=tmp_path / "none.json")
+    async with app.run_test(size=(110, 40)) as pilot:
+        app.push_screen(ReplayScreen(result))
+        await pilot.pause()
+        assert isinstance(app.screen, ReplayScreen)
+
+        opts = app.screen.query_one("#timeline", OptionList)
+        assert opts.option_count == len(s0.timeline)
+        info = app.screen.query_one("#step-info")
+        assert "step 0/" in str(info.render())
+        assert "start" in str(info.render())
+
+        await pilot.press("right")
+        assert "step 1/" in str(app.screen.query_one("#step-info").render())
+
+        await pilot.press("space")
+        assert app.screen.query_one("#btn-play", Button).label == "Pause"
+        await pilot.press("space")
+        assert app.screen.query_one("#btn-play", Button).label == "Play"
+
+        solve_sel = app.screen.query_one("#solve-select", Select)
+        solve_sel.value = s1.index
+        await pilot.pause()
+        assert "step 0/" in str(app.screen.query_one("#step-info").render())
+        assert app.screen.query_one("#timeline", OptionList).option_count == len(s1.timeline)

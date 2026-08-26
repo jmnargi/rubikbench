@@ -51,8 +51,13 @@ class ResultsScreen(Screen):
                     yield RichLog(id="detail-transcript", markup=True, wrap=True)
         with Horizontal(id="buttons"):
             yield Button("Export JSONL", id="export-btn")
+            yield Button("Replay", id="replay-btn")
             yield Button("Run again", id="rerun-btn", variant="primary")
             yield Button("Back to config", id="back-btn")
+    @on(Button.Pressed, "#replay-btn")
+    def _on_replay(self) -> None:
+        self.app.show_replay(self.result, self.selected or 0)  # type: ignore[attr-defined]
+
 
     def on_mount(self) -> None:
         table = self.query_one("#table", DataTable)

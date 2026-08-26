@@ -70,6 +70,10 @@ class ConfigScreen(Screen):
                         "" if cfg.max_input_tokens is None else str(cfg.max_input_tokens),
                         id="max_input_tokens", placeholder="e.g. 32768",
                     )),
+                    ("Prompt cache retention (s, blank = none)", Input(
+                        "" if cfg.cache_retention is None else str(cfg.cache_retention),
+                        id="cache_retention", placeholder="e.g. 3600",
+                    )),
                     ("Tool choice", Select(_TOOL_CHOICE_OPTIONS, value=cfg.tool_choice, id="tool_choice")),
                     ("Stream responses", Switch(value=cfg.stream, id="stream_switch")),
                     ("Extra body params (JSON)", TextArea(json.dumps(cfg.extra_body or {}, indent=1), id="extra_body", language="json")),
@@ -155,6 +159,7 @@ class ConfigScreen(Screen):
             max_retries=self._int("max_retries", 2),
             max_output_tokens=self._opt_int("max_output_tokens"),
             max_input_tokens=self._opt_int("max_input_tokens"),
+            cache_retention=self._opt_int("cache_retention"),
             stream=self.query_one("#stream_switch", Switch).value,
             tool_choice=self.query_one("#tool_choice", Select).value or "auto",
             num_solves=self._int("num_solves", 5),
@@ -242,6 +247,7 @@ class ConfigScreen(Screen):
         self._fill("max_retries", cfg.max_retries)
         self._fill("max_output_tokens", cfg.max_output_tokens)
         self._fill("max_input_tokens", cfg.max_input_tokens)
+        self._fill("cache_retention", cfg.cache_retention)
         self._fill("num_solves", cfg.num_solves)
         self._fill("max_turns", cfg.max_turns)
         self._fill("scramble_len", cfg.scramble_len)

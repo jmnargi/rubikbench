@@ -10,6 +10,7 @@ from .. import __version__
 from ..benchmark import BenchmarkResult
 from ..config import DEFAULT_CONFIG_PATH, BenchmarkConfig, load_config
 from .config_screen import ConfigScreen
+from .replay_screen import ReplayScreen
 from .results_screen import ResultsScreen
 from .run_screen import RunScreen
 
@@ -43,6 +44,9 @@ class RubikBenchApp(App):
         self.result = result
         self.switch_screen(ResultsScreen(result))
 
+    def show_replay(self, result: BenchmarkResult, initial_solve: int = 0) -> None:
+        self.result = result
+        self.push_screen(ReplayScreen(result, initial_solve))
     def show_config(self) -> None:
         self.switch_screen(ConfigScreen())
 

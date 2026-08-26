@@ -42,7 +42,11 @@ class AssistantTurn:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_tokens: int = 0
+    total_tokens: int = 0
+    finish_reason: str | None = None
     latency: float = 0.0
+    ttft: float = 0.0
 
 
 class LLMClient(Protocol):
@@ -100,6 +104,7 @@ class OpenAICompatibleClient:
             kwargs["temperature"] = self._temperature
 
         started = time.monotonic()
+        self._request_started = started
         try:
             if self._stream:
                 turn = self._complete_stream(**kwargs)
@@ -113,26 +118,50 @@ class OpenAICompatibleClient:
         turn.latency = time.monotonic() - started
         return turn
 
+    @staticmethod
+    def _usage_fields(usage: Any) -> tuple[int, int, int, int]:
+        """(prompt, completion, cached, total) tokens from OpenAI or Anthropic-style usage."""
+        prompt = completion = cached = total = 0
+        if usage is not None:
+            prompt = getattr(usage, "prompt_tokens", 0) or 0
+            completion = getattr(usage, "completion_tokens", 0) or 0
+            total = getattr(usage, "total_tokens", 0) or 0
+            details = getattr(usage, "prompt_tokens_details", None)
+            if details is not None:
+                cached = getattr(details, "cached_tokens", 0) or 0
+            else:
+                cached = getattr(usage, "cache_read_input_tokens", 0) or 0  # Anthropic style
+        return prompt, completion, cached, total
+
     # -- internals ----------------------------------------------------------
     def _complete_stream(self, **kwargs: Any) -> AssistantTurn:
         content_parts: list[str] = []
         slots: dict[int, dict[str, str]] = {}
-        prompt_tokens = completion_tokens = 0
+        prompt_tokens = completion_tokens = cached_tokens = total_tokens = 0
+        finish_reason: str | None = None
+        ttft = 0.0
         order: list[int] = []
+        seen_payload = False
         stream = self._client.chat.completions.create(stream=True, **kwargs)
         for chunk in stream:
-            usage = getattr(chunk, "usage", None)
-            if usage is not None:
-                prompt_tokens = getattr(usage, "prompt_tokens", prompt_tokens) or prompt_tokens
-                completion_tokens = getattr(usage, "completion_tokens", completion_tokens) or completion_tokens
+            prompt_tokens, completion_tokens, cached_tokens, total_tokens = self._usage_fields(
+                getattr(chunk, "usage", None) or None
+            )
             for choice in getattr(chunk, "choices", []) or []:
+                reason = getattr(choice, "finish_reason", None)
+                if reason:
+                    finish_reason = reason
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
                 content = getattr(delta, "content", None)
                 if content:
                     content_parts.append(content)
-                for tc in getattr(delta, "tool_calls", None) or []:
+                tool_deltas = getattr(delta, "tool_calls", None) or []
+                if (content or tool_deltas) and not seen_payload:
+                    seen_payload = True
+                    ttft = time.monotonic() - self._request_started
+                for tc in tool_deltas:
                     idx = getattr(tc, "index", 0)
                     slot = slots.get(idx)
                     if slot is None:
@@ -164,6 +193,10 @@ class OpenAICompatibleClient:
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+            total_tokens=total_tokens,
+            finish_reason=finish_reason,
+            ttft=ttft,
         )
 
     def _parse_response(self, response: Any) -> AssistantTurn:
@@ -171,6 +204,7 @@ class OpenAICompatibleClient:
         choice = choices[0] if choices else None
         message = getattr(choice, "message", None) if choice is not None else None
         content = getattr(message, "content", None) if message is not None else None
+        finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
         tool_calls: list[ToolCall] = []
         for tc in getattr(message, "tool_calls", None) or []:
             fn = getattr(tc, "function", None)
@@ -187,14 +221,17 @@ class OpenAICompatibleClient:
                     raw=raw,
                 )
             )
-        usage = getattr(response, "usage", None)
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0 if usage is not None else 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0 if usage is not None else 0
+        prompt_tokens, completion_tokens, cached_tokens, total_tokens = self._usage_fields(
+            getattr(response, "usage", None)
+        )
         return AssistantTurn(
             content=content,
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
+            total_tokens=total_tokens,
+            finish_reason=finish_reason,
         )
 
 

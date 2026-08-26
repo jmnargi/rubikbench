@@ -103,10 +103,15 @@ def build_response(reply: dict[str, Any], model: str = "mock") -> dict[str, Any]
             {
                 "index": 0,
                 "message": message,
-                "finish_reason": "tool_calls" if reply.get("tool_calls") else "stop",
+                "finish_reason": reply.get("finish_reason") or ("tool_calls" if reply.get("tool_calls") else "stop"),
             }
         ],
-        "usage": {"prompt_tokens": 12, "completion_tokens": 7, "total_tokens": 19},
+        "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 7,
+            "total_tokens": 19,
+            "prompt_tokens_details": {"cached_tokens": 4},
+        },
     }
 
 
@@ -159,7 +164,12 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(_sse_chunk(data))
             self.wfile.flush()
 
-        usage = {"prompt_tokens": 12, "completion_tokens": 7}
+        usage = {
+            "prompt_tokens": 12,
+            "completion_tokens": 7,
+            "total_tokens": 19,
+            "prompt_tokens_details": {"cached_tokens": 4},
+        }
         emit({"choices": [{"delta": {"role": "assistant", "content": ""}, "index": 0}]})
         content = reply.get("content")
         if content:
@@ -177,7 +187,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "index": i, "function": {"arguments": args[half:]},
             }]}, "index": 0}
             emit({"choices": [rest]})
-        finish = "tool_calls" if reply.get("tool_calls") else "stop"
+        finish = reply.get("finish_reason") or ("tool_calls" if reply.get("tool_calls") else "stop")
         emit({"choices": [{"delta": {}, "index": 0, "finish_reason": finish}], "usage": usage})
         self.wfile.write(b"data\n")
         self.wfile.flush()

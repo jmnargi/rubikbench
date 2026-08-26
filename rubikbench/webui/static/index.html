@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RubikBench - Replay</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; background: #101418; color: #dde3ea; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 10px 16px; border-bottom: 1px solid #26303a; flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .04em; }
+  header .file { color: #8fa3b8; font-family: ui-monospace, monospace; font-size: 12px; }
+  header .model { color: #7fd4a2; font-size: 12px; }
+  main { display: grid; grid-template-columns: minmax(320px, 1fr) 380px; gap: 0; min-height: calc(100vh - 45px); }
+  #scene { position: relative; background: radial-gradient(circle at 50% 30%, #1a222b, #0c1014); }
+  #threed { width: 100%; height: 100%; position: absolute; inset: 0; }
+  aside { border-left: 1px solid #26303a; padding: 12px 14px; overflow-y: auto; max-height: calc(100vh - 45px); }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .chip { background: #1b2530; border: 1px solid #2c3a4a; border-radius: 6px; padding: 3px 8px; font-size: 11.5px; }
+  .chip b { color: #8fd0ff; }
+  .card { background: #151d26; border: 1px solid #263347; border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+  .card h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8fa3b8; }
+  .controls { display: grid; grid-template-columns: auto auto auto 1fr auto; gap: 6px; align-items: center; }
+  button { background: #1e2937; color: #dde3ea; border: 1px solid #33455c; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12.5px; }
+  button:hover { background: #27384c; }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=range] { width: 100%; }
+  select { background: #1e2937; color: #dde3ea; border: 1px solid #33455c; border-radius: 6px; padding: 4px 6px; font-size: 12px; }
+  #step-info { font-family: ui-monospace, monospace; font-size: 12px; }
+  #step-info .moves { color: #ffd28f; word-break: break-all; }
+  #warnings .warn { color: #ffb08f; margin: 3px 0; font-size: 12px; }
+  #list { font-family: ui-monospace, monospace; font-size: 11.5px; max-height: 240px; overflow-y: auto; }
+  #list div { padding: 2px 6px; border-left: 2px solid transparent; cursor: pointer; }
+  #list div:hover, #list div.active { background: #1e2937; }
+  #list div.active { border-left-color: #8fd0ff; }
+  .ok { color: #7fd4a2; } .bad { color: #ff7b7b; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } #scene { height: 55vh; } aside { max-height: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <h1>RubikBench replay</h1>
+  <span class="file" id="file"></span>
+  <span class="model" id="model"></span>
+  <span id="hint"></span>
+</header>
+<main>
+  <section id="scene"><div id="threed"></div></section>
+  <aside>
+    <div class="card">
+      <h3>Solve</h3>
+      <select id="solve-select" style="width:100%"></select>
+      <div class="chip-row" id="chips"></div>
+    </div>
+    <div class="card">
+      <h3>Playback</h3>
+      <div class="controls">
+        <button id="btn-play" title="Play/pause">Play</button>
+        <button id="btn-prev" title="Previous step">&#9664;</button>
+        <button id="btn-next" title="Next step">&#9654;</button>
+        <input type="range" id="slider" min="0" max="0" value="0" step="1">
+        <select id="speed" title="Playback speed">
+          <option value="0.5">0.5x</option><option value="1" selected>1x</option>
+          <option value="2">2x</option><option value="4">4x</option>
+          <option value="8">8x</option><option value="16">16x</option>
+          <option value="32">32x</option>
+        </select>
+      </div>
+      <label style="font-size:11.5px"><input type="checkbox" id="loop"> loop</label>
+      <span id="clock" style="float:right;font-size:11.5px;color:#8fa3b8"></span>
+      <div id="step-info" style="margin-top:6px"></div>
+    </div>
+    <div class="card" id="warnings" style="display:none"><h3>Warnings</h3></div>
+    <div class="card">
+      <h3>Timeline <span id="list-count" style="color:#8fa3b8"></span></h3>
+      <div id="list"></div>
+    </div>
+  </aside>
+</main>
+<script>window.RUN = /*__RUN_DATA__*/</script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

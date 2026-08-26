@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import BenchmarkConfig
-from .cube import Cube
+from .cube import Cube, parse_moves
 from .llm import LLMClient, LLMError
 from .prompts import SYSTEM_PROMPT, TOOLS, initial_user_prompt
 from .rendering import render_plain
@@ -118,6 +118,13 @@ class SolveResult:
     elapsed: float
     prompt_tokens: int
     completion_tokens: int
+    cached_tokens: int
+    total_tokens: int
+    retries: int
+    finish_reasons: list[str]
+    truncated: bool
+    #: Cube states for replay: one entry per applied move batch.
+    timeline: list[dict[str, Any]]
     par: int
     score: float
     breakdown: dict[str, Any]
@@ -141,7 +148,6 @@ class BenchmarkResult:
         moves = [s.total_moves for s in solved] or [0]
         turns = [s.turns for s in solved] or [0]
         tools = [s.tool_calls for s in solved] or [0]
-        times = [s.elapsed for s in solved] or [0]
         return {
             "solves": n,
             "solved": len(solved),
@@ -152,9 +158,17 @@ class BenchmarkResult:
             "avg_moves": round(sum(moves) / len(moves), 2) if solved else 0.0,
             "avg_turns": round(sum(turns) / len(turns), 2) if solved else 0.0,
             "avg_tool_calls": round(sum(tools) / len(tools), 2) if solved else 0.0,
-            "avg_time": round(sum(times) / len(times), 2) if solved else 0.0,
             "total_prompt_tokens": sum(s.prompt_tokens for s in self.solves),
             "total_completion_tokens": sum(s.completion_tokens for s in self.solves),
+            "total_cached_tokens": sum(s.cached_tokens for s in self.solves),
+            "total_tokens": sum(s.total_tokens for s in self.solves),
+            "total_retries": sum(s.retries for s in self.solves),
+            "truncated_solves": sum(1 for s in self.solves if s.truncated),
+            "avg_tool_calls_per_turn": (
+                round(sum(s.tool_calls for s in solved) / max(1, sum(s.turns for s in solved)), 2)
+                if solved
+                else 0.0
+            ),
         }
 
 # --------------------------------------------------------------------------- context trimming
@@ -239,18 +253,35 @@ def run_solve(
         {"role": "user", "content": initial_user_prompt(ctx.cube)},
     ]
     transcript: list[dict[str, Any]] = []
+    timeline: list[dict[str, Any]] = []
     started = time.monotonic()
     turns = 0
     tool_calls_total = 0
     prompt_tokens = 0
     completion_tokens = 0
+    cached_tokens = 0
+    total_tokens_sum = 0
+    retries = 0
+    finish_reasons: list[str] = []
     solved = ctx.cube.is_solved()
     error: str | None = None
+
+    def push_timeline(action: str, moves: list[str]) -> None:
+        timeline.append({
+            "i": len(timeline),
+            "t": round(time.monotonic() - started, 3),
+            "turn": turns,
+            "action": action,
+            "moves": list(moves),
+            "facelets": "".join(ctx.cube.facelets),
+            "solved": ctx.cube.is_solved(),
+        })
 
     def cancelled() -> bool:
         return cancel_event is not None and cancel_event.is_set()
 
     _emit(emitter, "solve_started", index=index, scramble=scramble_to_string(scramble), par=0)
+    push_timeline("start", [])
 
     while turns < cfg.max_turns and not solved:
         if cancelled():
@@ -282,14 +313,22 @@ def run_solve(
             break
         if error:
             break
+        retries += max(0, attempt - 1)
 
         turns += 1
         prompt_tokens += turn.prompt_tokens
         completion_tokens += turn.completion_tokens
+        cached_tokens += turn.cached_tokens
+        total_tokens_sum += turn.total_tokens
+        if turn.finish_reason:
+            finish_reasons.append(turn.finish_reason)
         transcript.append({
             "turn": turns, "role": "assistant", "content": turn.content,
             "tool_calls": [{"name": tc.name, "id": tc.id, "arguments": tc.arguments} for tc in turn.tool_calls],
-            "latency": round(turn.latency, 3),
+            "latency": round(turn.latency, 3), "ttft": round(turn.ttft, 3),
+            "prompt_tokens": turn.prompt_tokens, "completion_tokens": turn.completion_tokens,
+            "cached_tokens": turn.cached_tokens, "total_tokens": turn.total_tokens,
+            "finish_reason": turn.finish_reason,
         })
         _emit(emitter, "turn", index=index, turn=turns, content=turn.content,
               tool_call_names=[tc.name for tc in turn.tool_calls], latency=turn.latency)
@@ -314,12 +353,17 @@ def run_solve(
                     error = error or "aborted by user"
                     break
                 tool_calls_total += 1
+                action = "apply" if tc.name == "apply_moves" else ("reset" if tc.name == "reset_cube" else "observe")
+                proposed = []
+                if tc.name == "apply_moves":
+                    proposed, _ = parse_moves(str(tc.arguments.get("moves", "") or ""))
                 result_text = execute_tool(tc.name, tc.arguments, ctx)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
                 transcript.append({
                     "turn": turns, "role": "tool", "name": tc.name,
                     "arguments": tc.arguments, "content": result_text,
                 })
+                push_timeline(action, proposed)
                 _emit(emitter, "state", index=index, facelets=ctx.cube.facelets,
                       history=list(ctx.cube.history), total_moves=ctx.total_moves,
                       turns=turns, tool_calls=tool_calls_total, solved=ctx.cube.is_solved())
@@ -339,6 +383,7 @@ def run_solve(
                             f"{' '.join(valid)}. Ignored: {invalid or 'none'}.\n{ctx.state_text()}"
                         ),
                     })
+                    push_timeline("text", valid)
                     if ctx.cube.is_solved():
                         solved = True
                 elif not any(k in text.lower() for k in ("error", "sorry", "fix", "retry", "invalid")):
@@ -373,6 +418,12 @@ def run_solve(
         elapsed=round(elapsed, 3),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        cached_tokens=cached_tokens,
+        total_tokens=total_tokens_sum,
+        retries=retries,
+        finish_reasons=list(finish_reasons),
+        truncated=any(r == "length" for r in finish_reasons),
+        timeline=timeline,
         par=par,
         score=breakdown.score,
         breakdown={
@@ -494,11 +545,17 @@ def solve_to_dict(solve: SolveResult) -> dict[str, Any]:
         "total_moves": solve.total_moves,
         "resets": solve.resets,
         "elapsed": solve.elapsed,
+        "retries": solve.retries,
+        "truncated": solve.truncated,
+        "finish_reasons": solve.finish_reasons,
         "prompt_tokens": solve.prompt_tokens,
         "completion_tokens": solve.completion_tokens,
+        "cached_tokens": solve.cached_tokens,
+        "total_tokens": solve.total_tokens,
         "par": solve.par,
         "score": solve.score,
         "breakdown": solve.breakdown,
+        "timeline": solve.timeline,
         "error": solve.error,
         "transcript": solve.transcript,
     }

@@ -56,7 +56,7 @@ Do these steps on the configuration screen:
 4. Enter the model name.
 5. Select the reasoning effort. The values are default, low, medium, and high. RubikBench sends this value in the request body.
 6. Enter the max output tokens. Leave it empty to use the model default. RubikBench sends this value as "max_tokens" in the request body.
-7. Enter the max input tokens. Leave it empty for no limit. RubikBench does not send this value to the server. It trims the older conversation turns to keep the request below this value.
+7. Enter the max input tokens. Leave it empty for no limit. RubikBench does not send this value to the server. It trims the older conversation turns to keep the request below this value. You can also enter the prompt cache retention in seconds. Leave it empty for no retention request. RubikBench sends the retention as "prompt_cache_retention" in the request body. The server reports the cached tokens in the usage. RubikBench records them in the results.
 8. Enter the extra body parameters in JSON. RubikBench sends them with every chat-completion request. Use this field for model-specific values, for example "max_completion_tokens".
 9. Enter the benchmark values. The main values are:
    - The number of solves.
@@ -111,6 +111,12 @@ Some models write moves as text instead of using the tool. RubikBench can parse 
 
 If a request fails, RubikBench retries it. The number of retries is a configuration value. The default is 2.
 
+RubikBench records the number of retries in the results.
+
+### Truncation
+
+The server can stop an answer before it is complete. The server reports the finish reason "length" in this case. RubikBench records this finish reason. A solve with this finish reason is truncated. The results and the export show the truncated solves.
+
 ### Starting scrambles
 
 Every solve starts from a solved cube. RubikBench applies a scramble to the cube.
@@ -161,6 +167,10 @@ The results screen shows:
   - Moves — the scramble and the applied moves.
   - Transcript — the complete model activity.
 
+The results screen also shows the token data and the finish reasons. The token data has the input tokens, the output tokens, and the cached tokens for each solve. A finish reason "length" marks a truncated solve.
+
+Select "Replay" to review one solve step by step. The replay screen shows the cube and a timeline. The timeline has one entry for every state change. Use the space bar to play or pause. Use the arrow keys to move one step. Use the plus and minus keys to change the speed. Select another solve to replay it.
+
 Select "Export JSONL" to save the results. The output file is in the directory `rubikbench_results`.
 
 ## 8. Run the benchmark without the TUI
@@ -183,9 +193,32 @@ Run this command to start a benchmark run:
 uv run rubikbench run --config cfg.json -o results.jsonl
 ```
 
-The run command prints a JSON summary to the standard output. The summary has the solve rate, the average score, the average moves, and the average turns.
+The run command prints a JSON summary to the standard output. The summary has the solve rate, the average score, the average moves, the tokens, the retries, and the number of truncated solves.
 
-The run command writes one line to the output file for each solve. The first line is the header. It contains the configuration and the aggregate statistics. Each solve line contains the full transcript.
+The run command writes one line to the output file for each solve. The first line is the header. It contains the configuration and the aggregate statistics. Each solve line contains the analytics and the full transcript. The analytics have the input tokens, the output tokens, the cached tokens, the retries, the finish reasons, and the truncation flag. Each solve line also contains a timeline. The timeline has the cube state after every state change.
+
+Run this command to merge run files into one dataset file:
+
+```bash
+uv run rubikbench aggregate run1.jsonl run2.jsonl -o dataset.json
+```
+
+The dataset file is one JSON document. It contains all solve records and the totals. The totals have the tokens, the turns, the tool calls, the moves, the retries, and the truncated solves.
+
+Run this command to replay a run file in the browser:
+
+```bash
+uv run rubikbench view results.jsonl
+```
+
+The command starts a local web server. The server opens the page in your browser. The page shows the cube in 3D. The cube replays the states in the timeline. You can play, pause, and jump to a step. You can change the replay speed.
+
+The command has two optional flags:
+
+- `--no-open`. Use it to start the server without opening the browser.
+- `--port N`. Use it to select the port. The default port is 8321.
+
+Press Control+C to stop the server.
 
 ## 9. Run the tests
 
@@ -195,7 +228,7 @@ Run this command:
 uv run pytest
 ```
 
-The test suite has 65 tests. It covers the cube model, the scramble generator, the scoring, the configuration, the tool loop, the headless CLI, and the TUI.
+The test suite has 106 tests. It covers the cube model, the scramble generator, the scoring, the configuration, the tool loop, the token analytics, the dataset aggregation, the web replay, the headless CLI, and the TUI.
 
 Run this command to check the style:
 
@@ -216,6 +249,8 @@ rubikbench/
   benchmark.py  # The tool execution and the turn loop.
   prompts.py    # The system prompt and the tool schemas.
   solver_ref.py # The kociemba integration.
+  aggregate.py  # The dataset aggregation.
   cli.py        # The TUI entry point and the headless commands.
+  webui/        # The web replay server and the 3D page.
   tui/          # The Textual application.
 ```

@@ -38,8 +38,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("presets", help="list available provider presets")
 
-    cfg_edit = sub.add_parser("validate", help="validate a config file")
-    cfg_edit.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    agg = sub.add_parser(
+        "aggregate",
+        help="merge run JSONL files into one dataset JSON file",
+    )
+    agg.add_argument("files", nargs="+", type=Path, help="run JSONL files to merge")
+    agg.add_argument("-o", "--out", type=Path, default=Path("dataset.json"), help="output dataset JSON file")
+
+    view = sub.add_parser(
+        "view",
+        help="open a 3D web replay of a run file in the browser",
+    )
+    view.add_argument("file", type=Path, help="run JSONL file")
+    view.add_argument("--port", type=int, default=None, help="HTTP port (default 8321)")
+    view.add_argument("--no-open", action="store_true", help="do not open the browser")
+
+    validate = sub.add_parser("validate", help="validate a config file")
+    validate.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     return parser
 
 
@@ -105,6 +120,40 @@ def cmd_presets() -> int:
         print(f"{name:20} {p['base_url']:<40} model: {p['model'] or '<set in TUI>'}{env}")
     return 0
 
+def cmd_aggregate(args: argparse.Namespace) -> int:
+    from .aggregate import aggregate_files, write_dataset
+
+    try:
+        dataset = aggregate_files(args.files)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    out = write_dataset(dataset, args.out)
+    t = dataset["totals"]
+    print(f"dataset: {t['solves']} solves across {dataset['runs']} run(s)")
+    print(f"  solved {t['solved']}/{t['solves']} (rate {t['solve_rate']})")
+    print(f"  tokens: {t['prompt_tokens']} in / {t['completion_tokens']} out / {t['cached_tokens']} cached")
+    print(f"  turns {t['turns']} tools {t['tool_calls']} moves {t['moves']} retries {t['retries']} truncated {t['truncated']}")
+    print(f"written to {out}")
+    return 0
+
+
+def cmd_view(args: argparse.Namespace) -> int:
+    from .webui.server import DEFAULT_PORT, serve_run
+
+    try:
+        serve_run(args.file, port=args.port or DEFAULT_PORT, open_browser=not args.no_open)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
 
 def cmd_validate(args: argparse.Namespace) -> int:
     try:
@@ -126,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_presets()
     if args.command == "validate":
         return cmd_validate(args)
+    if args.command == "aggregate":
+        return cmd_aggregate(args)
+    if args.command == "view":
+        return cmd_view(args)
     # default: TUI
     from .tui.app import RubikBenchApp
 
