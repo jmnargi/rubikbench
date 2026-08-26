@@ -101,6 +101,29 @@ def test_headless_run_from_env_no_config(mock, tmp_path, capsys, monkeypatch):
     assert "SOLVED" in captured.err
 
 
+def test_headless_run_cli_args_override_env(mock, tmp_path, capsys, monkeypatch):
+    """CLI flags beat .env values; nothing beats an explicit flag."""
+    server, url = mock
+    monkeypatch.setenv("RUBIKBENCH_SOLVES", "3")
+    monkeypatch.setenv("RUBIKBENCH_MODEL", "mock")
+    out = tmp_path / "out.jsonl"
+    code = main([
+        "run",
+        "--base-url", url,
+        "--api-key", "k",
+        "--model", "mock",
+        "-n", "1",
+        "--max-output-tokens", "128",
+        "-o", str(out),
+        "--no-color",
+    ])
+    assert code == 0
+    stdout = capsys.readouterr().out
+    agg = json.loads(stdout[: stdout.index("results written")])
+    assert agg["solves"] == 1  # CLI -n 1 beats env RUBIKBENCH_SOLVES=3
+    assert server.seen_bodies[0]["max_tokens"] == 128
+
+
 def test_headless_run_from_env_missing_key(tmp_path, capsys, monkeypatch):
     """A remote preset without any key in .env is reported clearly."""
     code = main(["run", "-o", str(tmp_path / "out.jsonl")])

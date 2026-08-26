@@ -38,36 +38,33 @@ uv sync --extra solver --extra dev
 
 The solver extra installs kociemba. Kociemba gives the par value for scoring. It is optional. Without kociemba, RubikBench uses the value 20 for par.
 
-## 2. Start the TUI
+## 2. Run the benchmark
 
-Run this command:
+Run this command to start a benchmark immediately (it reads `.env`, uses
+CLI flags if given, and streams the model's output live):
 
 ```bash
 uv run rubikbench
 ```
 
-## 3. Configure the benchmark
+`uv run rubikbench run` is identical. There is no config menu and nothing to
+click: if `.env` is missing something and no flag provides it, the command
+prints what's missing and exits with a pointer to `rubikbench --help`.
 
-Do these steps on the configuration screen:
+For a full-screen live view, run:
 
-1. Select a preset. RubikBench has presets for OpenAI, OpenRouter, DeepSeek, Groq, Mistral, vLLM, Ollama, and LM Studio. Select "Apply preset" to fill the endpoint fields. For a custom server, enter the values yourself.
-2. Enter the Base URL. It must be an OpenAI-compatible /v1 endpoint.
-3. Enter the API key. Leave it empty for local servers, for example Ollama or vLLM.
-4. Enter the model name.
-5. Select the reasoning effort. The values are default, low, medium, and high. RubikBench sends this value in the request body.
-6. Enter the max output tokens. Leave it empty to use the model default. RubikBench sends this value as "max_tokens" in the request body.
-7. Enter the max input tokens. Leave it empty for no limit. RubikBench does not send this value to the server. It trims the older conversation turns to keep the request below this value. You can also enter the prompt cache retention in seconds. Leave it empty for no retention request. RubikBench sends the retention as "prompt_cache_retention" in the request body. The server reports the cached tokens in the usage. RubikBench records them in the results.
-8. Enter the extra body parameters in JSON. RubikBench sends them with every chat-completion request. Use this field for model-specific values, for example "max_completion_tokens".
-9. Enter the benchmark values. The main values are:
-   - The number of solves.
-   - The turn budget.
-   - The starting scramble set.
-   - The scramble length.
-   - The seed. Leave it empty for a random seed.
-10. Enter the scoring weights. The default weights are moves 0.5, conversation turns 0.3, and tool calls 0.2.
-11. Select "Start benchmark".
+```bash
+uv run rubikbench tui
+```
 
-RubikBench saves the configuration to the file `rubikbench_config.json` when the run starts.
+The TUI also starts the benchmark from `.env` immediately. It is view-only:
+live streaming model output, tool calls, cube state, and realtime stats.
+Press Ctrl+C (or `q`) to quit.
+
+## 3. Where settings come from
+
+Precedence: CLI flags > `.env` > `rubikbench_config.json` (if present) >
+built-in defaults. See section 8 for the full `.env` and flag reference.
 
 ## 4. Run the benchmark
 
@@ -76,9 +73,9 @@ The live run screen shows:
 - The current cube, with colors.
 - The move history.
 - The statistics. The statistics are turns, tool calls, moves, elapsed time, and score.
-- The log of the model activity.
+- The log of the model activity, streaming live as the model replies.
 
-You can abort the run. Use the "Abort" button.
+Press Ctrl+C (or `q`) to quit at any time.
 
 ## 5. How a solve works
 
@@ -194,6 +191,8 @@ Then run:
 uv run rubikbench run
 ```
 
+(Plain `uv run rubikbench` does exactly the same thing.)
+
 With no config file present, RubikBench defaults to the OpenAI endpoint and
 model; everything else is optional. All supported `.env` variables:
 
@@ -243,6 +242,23 @@ Run this command to start a benchmark run:
 ```bash
 uv run rubikbench run --config cfg.json -o results.jsonl
 ```
+
+`rubikbench run` starts immediately and needs no TUI and no config file:
+without `--config` it reads `.env` (see above), and every setting can be
+passed as a flag, which overrides `.env` and the config file:
+
+```bash
+uv run rubikbench run \
+  --base-url https://api.openai.com/v1 \
+  --api-key sk-... \
+  --model gpt-4o \
+  --max-input-tokens 32768 \
+  --max-output-tokens 4096 \
+  -n 3 --max-turns 40 --scramble-len 22 --seed 42
+```
+
+Run `uv run rubikbench run --help` for the full flag list. The model's text
+and tool calls stream to the terminal live as they happen.
 
 The run command prints a JSON summary to the standard output. The summary has the solve rate, the average score, the average moves, the tokens, the retries, and the number of truncated solves.
 

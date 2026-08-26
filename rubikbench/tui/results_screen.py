@@ -53,7 +53,6 @@ class ResultsScreen(Screen):
             yield Button("Export JSONL", id="export-btn")
             yield Button("Replay", id="replay-btn")
             yield Button("Run again", id="rerun-btn", variant="primary")
-            yield Button("Back to config", id="back-btn")
     @on(Button.Pressed, "#replay-btn")
     def _on_replay(self) -> None:
         self.app.show_replay(self.result, self.selected or 0)  # type: ignore[attr-defined]
@@ -162,7 +161,3 @@ class ResultsScreen(Screen):
     @on(Button.Pressed, "#rerun-btn")
     def _on_rerun(self) -> None:
         self.app.start_run()  # type: ignore[attr-defined]
-
-    @on(Button.Pressed, "#back-btn")
-    def _on_back(self) -> None:
-        self.app.show_config()  # type: ignore[attr-defined]

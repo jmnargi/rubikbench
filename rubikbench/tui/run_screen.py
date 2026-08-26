@@ -18,7 +18,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Label, ProgressBar, RichLog, Static
+from textual.widgets import Footer, Label, ProgressBar, RichLog, Static
 
 from ..benchmark import BenchmarkResult, BenchmarkRunner
 from ..config import BenchmarkConfig, api_key_from_env
@@ -44,7 +44,6 @@ class RunScreen(Screen):
     #run-top { height: 3; padding: 0 1; }
     #run-status { width: 1fr; content-align: left middle; }
     #run-progress { width: 28; margin: 0 1; }
-    #abort-btn { width: 14; }
     #run-body { height: 1fr; padding: 0 1; }
     #left-col { width: 44; }
     .card { border: round $panel; padding: 0 1 1 1; margin: 0 0 1 0; }
@@ -87,7 +86,6 @@ class RunScreen(Screen):
         with Horizontal(id="run-top"):
             yield Static("", id="run-status")
             yield ProgressBar(id="run-progress", total=self.config.num_solves, show_eta=False)
-            yield Button("Abort", id="abort-btn", variant="error")
         with Horizontal(id="run-body"):
             with Vertical(id="left-col"):
                 with Vertical(classes="card"):
@@ -335,9 +333,3 @@ class RunScreen(Screen):
         self.query_one("#st-time", Label).update(f"{elapsed:.1f}s")
         if self._tok_out > 0 and elapsed > 0:
             self.query_one("#st-speed", Label).update(f"{self._tok_out / elapsed:.0f} tok/s")
-
-    @on(Button.Pressed, "#abort-btn")
-    def _on_abort(self) -> None:
-        self.cancel.set()
-        self.query_one("#run-status", Static).update("Aborting after current step...")
-        self.query_one("#abort-btn", Button).disabled = True

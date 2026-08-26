@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
@@ -28,18 +29,43 @@ from .config import (
 from .llm import OpenAICompatibleClient
 
 
+def _add_run_args(parser: argparse.ArgumentParser) -> None:
+    """Endpoint, request, and benchmark flags shared by the top-level command
+    (bare ``rubikbench`` runs a benchmark) and the ``run`` subcommand.
+    """
+    parser.add_argument("--config", type=Path, default=None, help="config JSON file (default: rubikbench_config.json, or .env settings when absent)")
+    parser.add_argument("-o", "--out", type=Path, default=None, help="JSONL output file")
+    parser.add_argument("--no-color", action="store_true", help="disable ANSI colors in progress output")
+    # Endpoint and request knobs; each overrides .env / the config file.
+    parser.add_argument("--base-url", type=str, default=None, help="endpoint URL (overrides RUBIKBENCH_BASE_URL)")
+    parser.add_argument("--api-key", type=str, default=None, help="API key (overrides .env)")
+    parser.add_argument("--model", type=str, default=None, help="model name (overrides RUBIKBENCH_MODEL)")
+    parser.add_argument("--max-input-tokens", type=int, default=None, help="context cap (overrides RUBIKBENCH_MAX_INPUT_TOKENS)")
+    parser.add_argument("--max-output-tokens", type=int, default=None, help="sent as max_tokens (overrides RUBIKBENCH_MAX_OUTPUT_TOKENS)")
+    parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (overrides RUBIKBENCH_TEMPERATURE)")
+    parser.add_argument("--timeout", type=float, default=None, help="request timeout in seconds (overrides RUBIKBENCH_TIMEOUT)")
+    parser.add_argument("--max-retries", type=int, default=None, help="retries per request (overrides RUBIKBENCH_MAX_RETRIES)")
+    # Benchmark knobs.
+    parser.add_argument("-n", "--solves", type=int, default=None, help="number of solves (overrides RUBIKBENCH_SOLVES)")
+    parser.add_argument("--max-turns", type=int, default=None, help="turn budget per solve (overrides RUBIKBENCH_MAX_TURNS)")
+    parser.add_argument("--scramble-len", type=int, default=None, help="scramble length (overrides RUBIKBENCH_SCRAMBLE_LEN)")
+    parser.add_argument("--seed", type=int, default=None, help="fixed scramble seed (overrides RUBIKBENCH_SEED)")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rubikbench",
         description="Benchmark LLMs solving a Rubik's cube via OpenAI-compatible tool calls.",
     )
     parser.add_argument("--version", action="version", version=f"rubikbench {__version__}")
+    # Bare `rubikbench` = run a benchmark (reads .env when no flags are given).
+    _add_run_args(parser)
     sub = parser.add_subparsers(dest="command")
 
     run = sub.add_parser("run", help="run a benchmark headlessly (no TUI)")
-    run.add_argument("--config", type=Path, default=None, help="config JSON file (default: rubikbench_config.json, or .env settings when absent)")
-    run.add_argument("-o", "--out", type=Path, default=None, help="JSONL output file")
-    run.add_argument("--no-color", action="store_true", help="disable ANSI colors in progress output")
+    _add_run_args(run)
+
+    sub.add_parser("tui", help="launch the Textual TUI")
 
     sub.add_parser("presets", help="list available provider presets")
 
@@ -91,6 +117,30 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ValueError as exc:  # surface config errors
         print(f"error: invalid config: {exc}", file=sys.stderr)
         return 2
+
+    # CLI flags win over everything; only explicitly given flags are applied.
+    cli_overrides = {
+        "base_url": args.base_url,
+        "api_key": args.api_key,
+        "model": args.model,
+        "max_input_tokens": args.max_input_tokens,
+        "max_output_tokens": args.max_output_tokens,
+        "temperature": args.temperature,
+        "timeout": args.timeout,
+        "max_retries": args.max_retries,
+        "num_solves": args.solves,
+        "max_turns": args.max_turns,
+        "scramble_len": args.scramble_len,
+        "seed": args.seed,
+    }
+    overrides = {k: v for k, v in cli_overrides.items() if v is not None}
+    if overrides:
+        cfg = replace(cfg, **overrides)
+        try:
+            cfg.validate()
+        except ValueError as exc:  # surface config errors
+            print(f"error: invalid config: {exc}", file=sys.stderr)
+            return 2
 
     if not cfg.api_key and api_key_source(cfg.base_url):
         print(
@@ -177,6 +227,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    from .tui.app import RubikBenchApp
+
+    try:
+        app = RubikBenchApp()
+    except Exception as exc:  # noqa: BLE001 - surface config errors before the UI starts
+        print(f"error: {exc}", file=sys.stderr)
+        print("run `rubikbench --help` for all options", file=sys.stderr)
+        return 2
+    return app.run()
+
+
 def cmd_presets() -> int:
     for name, p in PRESETS.items():
         env = f" (api key from ${p['env']})" if p.get("env") else " (no key needed)"
@@ -258,8 +320,12 @@ def main(argv: list[str] | None = None) -> int:
     load_env()
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.command == "run":
+    if args.command in (None, "run"):
+        # Bare `rubikbench` and `rubikbench run` are the same: start the
+        # benchmark immediately (from .env when no flags are given).
         return cmd_run(args)
+    if args.command == "tui":
+        return cmd_tui(args)
     if args.command == "presets":
         return cmd_presets()
     if args.command == "validate":
@@ -268,11 +334,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_aggregate(args)
     if args.command == "view":
         return cmd_view(args)
-    # default: TUI
-    from .tui.app import RubikBenchApp
-
-    app = RubikBenchApp()
-    return app.run()
+    parser.error(f"unknown command: {args.command}")
+    return 2
 
 
 if __name__ == "__main__":

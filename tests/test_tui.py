@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from mock_openai import start_mock_server
-from textual.widgets import DataTable, Input, Select
+from textual.widgets import DataTable
 
 from rubikbench.config import BenchmarkConfig
 from rubikbench.tui.app import RubikBenchApp
@@ -31,28 +31,19 @@ async def wait_for(app: RubikBenchApp, pred, timeout: float = 30.0) -> None:
 
 
 async def test_full_flow_through_tui(mock, tmp_path):
+    """The view-only TUI starts the run immediately and lands on results."""
     server, url = mock
-    cfg = BenchmarkConfig(base_url=url, api_key="k", model="mock", num_solves=2, max_turns=20, seed=3)
-    config_file = tmp_path / "cfg.json"
-    app = RubikBenchApp(config_path=config_file)
+    cfg = BenchmarkConfig(
+        base_url=url, api_key="k", model="mock", num_solves=2, max_turns=20, seed=3,
+        max_output_tokens=512, max_input_tokens=4096, cache_retention=3600,
+        scramble_preset="superflip",
+    )
+    app = RubikBenchApp(config_path=tmp_path / "cfg.json")
     app.config = cfg
 
     async with app.run_test(size=(140, 44)) as pilot:
-        await wait_for(app, lambda a: a.screen.__class__.__name__ == "ConfigScreen")
-        # exercise the token cap fields through the form
-        app.screen.query_one("#max_output_tokens", Input).value = "512"
-        app.screen.query_one("#max_input_tokens", Input).value = "4096"
-        app.screen.query_one("#cache_retention", Input).value = "3600"
-        app.screen.query_one("#scramble_preset", Select).value = "superflip"
-        await pilot.click("#start_btn")
+        # the run starts automatically on mount - no clicks needed
         await wait_for(app, lambda a: a.result is not None)
-
-        saved = json.loads(config_file.read_text())
-        assert saved["model"] == "mock"
-        assert saved["max_output_tokens"] == 512
-        assert saved["max_input_tokens"] == 4096
-        assert saved["cache_retention"] == 3600
-        assert saved["scramble_preset"] == "superflip"
         from rubikbench.scramble import PREMADE_SCRAMBLES
 
         assert app.result.solves[0].scramble == PREMADE_SCRAMBLES["superflip"][0].split()
@@ -87,21 +78,15 @@ async def test_full_flow_through_tui(mock, tmp_path):
         assert len(lines) == 3
         assert json.loads(lines[1])["solved"] is True
 
-        # back to config
-        await pilot.click("#back-btn")
-        await wait_for(app, lambda a: a.screen.__class__.__name__ == "ConfigScreen")
 
+def test_app_rejects_invalid_config(tmp_path):
+    """A broken config file surfaces as a clear error before the UI starts."""
+    from rubikbench.tui.app import RubikBenchApp
 
-async def test_config_validation_shows_error(mock, tmp_path):
-    app = RubikBenchApp(config_path=tmp_path / "none.json")
-    app.config = BenchmarkConfig(base_url="", model="", num_solves=3)
-    async with app.run_test(size=(140, 44)) as pilot:
-        await wait_for(app, lambda a: a.screen.__class__.__name__ == "ConfigScreen")
-        await pilot.click("#start_btn")
-        await asyncio.sleep(0.3)
-        assert isinstance(app.screen, ResultsScreen) is False
-        status = app.screen.query_one("#status")
-        assert "Configuration error" in str(status.render())
+    bad = tmp_path / "cfg.json"
+    bad.write_text('{"base_url": "http://x/v1", "model": "m", "num_solves": 0}')
+    with pytest.raises(ValueError):
+        RubikBenchApp(config_path=bad)
 
 
 async def test_results_screen_for_empty_run(mock):
@@ -112,10 +97,10 @@ async def test_results_screen_for_empty_run(mock):
     empty = BenchmarkResult(config=cfg, solves=[], started_at_iso="now", duration=0.0)
     path = Path("tui_empty_test.json")
     try:
-        app = RubikBenchApp(config_path=path)
+        app = RubikBenchApp(config_path=path, auto_run=False)
         app.result = empty
         async with app.run_test(size=(120, 40)) as pilot:
-            app.switch_screen(ResultsScreen(empty))
+            app.push_screen(ResultsScreen(empty))
             await pilot.pause(0.2)
             table = app.screen.query_one("#table", DataTable)
             assert table.row_count == 1  # placeholder "—" row for empty runs
@@ -145,7 +130,7 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
             pass
 
     cfg = BenchmarkConfig(base_url="http://x/v1", model="mock", num_solves=1)
-    app = RubikBenchApp(config_path=tmp_path / "cfg.json")
+    app = RubikBenchApp(config_path=tmp_path / "cfg.json", auto_run=False)
     app.config = cfg
     async with app.run_test(size=(120, 40)) as pilot:
         app.push_screen(IdleRunScreen(cfg))
@@ -203,7 +188,7 @@ async def test_replay_screen_steps_and_plays(mock, tmp_path):
     s1 = run_solve(1, scramble, cfg, client)
     result = BenchmarkResult(config=cfg, solves=[s0, s1], started_at_iso="now", duration=1.0)
 
-    app = RubikBenchApp(config_path=tmp_path / "none.json")
+    app = RubikBenchApp(config_path=tmp_path / "none.json", auto_run=False)
     async with app.run_test(size=(110, 40)) as pilot:
         app.push_screen(ReplayScreen(result))
         await pilot.pause()
