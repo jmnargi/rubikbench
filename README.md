@@ -175,6 +175,44 @@ Select "Export JSONL" to save the results. The output file is in the directory `
 
 ## 8. Run the benchmark without the TUI
 
+### Run from .env (no config file)
+
+For a quick headless run you can skip the TUI and the config file entirely.
+RubikBench loads a `.env` file from the project directory at startup, so
+credentials never have to live in a config file (`.env` is gitignored).
+
+Create `.env` with at least an API key:
+
+```bash
+OPENROUTER_API_KEY=sk-or-...
+```
+
+Then run:
+
+```bash
+uv run rubikbench run
+```
+
+With no config file present, RubikBench defaults to the OpenRouter endpoint
+and a current free model with tool-calling support
+(`google/gemma-4-31b-it:free`). Optional `.env` variables:
+
+| Variable | Meaning |
+|---|---|
+| `OPENROUTER_API_KEY` | OpenRouter key; used automatically when the endpoint is OpenRouter. |
+| `RUBIKBENCH_API_KEY` | Generic API key override for any endpoint. |
+| `RUBIKBENCH_BASE_URL` | Override the endpoint URL. |
+| `RUBIKBENCH_MODEL` | Override the model, e.g. another `:free` model. |
+| `RUBIKBENCH_SOLVES` | Number of solves. |
+| `RUBIKBENCH_MAX_TURNS` | Turn budget per solve. |
+| `RUBIKBENCH_SCRAMBLE_LEN` | Scramble length. |
+| `RUBIKBENCH_SEED` | Fixed scramble seed (reproducible runs). |
+
+When a config file exists, environment values take precedence for the base
+URL, model, and API key; everything else comes from the file. Run
+`uv run rubikbench validate` to check the resolved settings and
+`uv run rubikbench presets` to list providers.
+
 Run this command to list the presets:
 
 ```bash

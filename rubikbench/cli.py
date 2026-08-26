@@ -18,7 +18,11 @@ from .benchmark import BenchmarkRunner, export_jsonl
 from .config import (
     DEFAULT_CONFIG_PATH,
     PRESETS,
+    apply_env_overrides,
+    config_from_env,
     load_config,
+    load_env,
+    preset_env_for,
 )
 from .llm import OpenAICompatibleClient
 
@@ -32,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     run = sub.add_parser("run", help="run a benchmark headlessly (no TUI)")
-    run.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="config JSON file")
+    run.add_argument("--config", type=Path, default=None, help="config JSON file (default: rubikbench_config.json, or .env settings when absent)")
     run.add_argument("-o", "--out", type=Path, default=None, help="JSONL output file")
     run.add_argument("--no-color", action="store_true", help="disable ANSI colors in progress output")
 
@@ -53,8 +57,8 @@ def _build_parser() -> argparse.ArgumentParser:
     view.add_argument("--port", type=int, default=None, help="HTTP port (default 8321)")
     view.add_argument("--no-open", action="store_true", help="do not open the browser")
 
-    validate = sub.add_parser("validate", help="validate a config file")
-    validate.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    validate = sub.add_parser("validate", help="validate a config file (or .env settings)")
+    validate.add_argument("--config", type=Path, default=None)
     return parser
 
 
@@ -65,13 +69,33 @@ def _print_progress_line(text: str, color: bool) -> None:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    # An explicitly requested config file that is missing is an error; running
+    # without --config falls back to .env settings (no TUI / config file needed).
+    explicit = args.config is not None
+    path = args.config or DEFAULT_CONFIG_PATH
     try:
-        cfg = load_config(args.config)
+        if path.is_file():
+            cfg = apply_env_overrides(load_config(path))
+        elif explicit:
+            raise FileNotFoundError(path)
+        else:
+            cfg = config_from_env()
+        cfg.validate()
     except FileNotFoundError:
-        print(f"error: config file not found: {args.config} (run the TUI first, or create one)", file=sys.stderr)
+        print(
+            f"error: config file not found: {path} (run the TUI first, or run without --config to use .env)",
+            file=sys.stderr,
+        )
         return 2
-    except Exception as exc:  # noqa: BLE001 - surface config errors
+    except ValueError as exc:  # surface config errors
         print(f"error: invalid config: {exc}", file=sys.stderr)
+        return 2
+
+    if not cfg.api_key and preset_env_for(cfg.base_url):
+        print(
+            f"error: no API key set; add {preset_env_for(cfg.base_url)}=... (or RUBIKBENCH_API_KEY=...) to .env",
+            file=sys.stderr,
+        )
         return 2
 
     cancel = threading.Event()
@@ -118,6 +142,7 @@ def cmd_presets() -> int:
     for name, p in PRESETS.items():
         env = f" (api key from ${p['env']})" if p.get("env") else " (no key needed)"
         print(f"{name:20} {p['base_url']:<40} model: {p['model'] or '<set in TUI>'}{env}")
+    print("\nTip: put OPENROUTER_API_KEY=... (or RUBIKBENCH_API_KEY=...) in .env and run `rubikbench run` without a config file.")
     return 0
 
 def cmd_aggregate(args: argparse.Namespace) -> int:
@@ -156,17 +181,34 @@ def cmd_view(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
+    explicit = args.config is not None
+    path = args.config or DEFAULT_CONFIG_PATH
     try:
-        cfg = load_config(args.config)
+        if path.is_file():
+            cfg = apply_env_overrides(load_config(path))
+        elif explicit:
+            raise FileNotFoundError(path)
+        else:
+            cfg = config_from_env()
         cfg.validate()
+    except FileNotFoundError:
+        print(f"invalid: config file not found: {path}", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001 - surface config errors
         print(f"invalid: {exc}", file=sys.stderr)
         return 1
-    print(f"config OK: {cfg.model} @ {cfg.base_url} ({cfg.num_solves} solves, {cfg.max_turns} max turns)")
+    key_state = "set (from environment)" if cfg.api_key else "not set (local server, or add OPENROUTER_API_KEY to .env)"
+    print(
+        f"config OK: {cfg.model} @ {cfg.base_url} "
+        f"({cfg.num_solves} solves, {cfg.max_turns} max turns); api key: {key_state}"
+    )
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Credentials and run settings can come from a .env file next to the
+    # project (gitignored); load it before any command reads the environment.
+    load_env()
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "run":

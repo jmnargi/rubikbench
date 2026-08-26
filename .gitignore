@@ -8,3 +8,6 @@ build/
 rubikbench_config.json
 rubikbench_results/
 .ruff_cache/
+.env
+.env.*
+!.env.example

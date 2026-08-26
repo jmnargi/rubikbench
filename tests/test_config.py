@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from rubikbench.config import (
     DEFAULT_CONFIG_PATH,
+    OPENROUTER_FREE_MODEL,
     PRESETS,
     BenchmarkConfig,
+    apply_env_overrides,
+    config_from_env,
     load_config,
+    load_env,
     preset_defaults,
     save_config,
 )
@@ -132,3 +138,101 @@ def test_scramble_preset_validation():
 def test_legacy_scrambles_migration():
     cfg = BenchmarkConfig.from_dict({"scrambles": ["R U F"], "base_url": "http://x/v1", "model": "m"})
     assert cfg.scramble_preset == "file"
+
+
+# --------------------------------------------------------------------------- .env
+
+
+def test_load_env_parses_file(tmp_path, monkeypatch):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(
+        "# comment\n"
+        "PLAIN=value1\n"
+        "export EXPORTED=value2\n"
+        "SPACED = value3\n"
+        'QUOTED="value 4"\n'
+        "SINGLE='v5'\n"
+        "INLINE=value6 # trailing comment\n"
+        'HASH_IN_QUOTES="a#b"\n'
+        "EMPTY=\n"
+        "NOEQUALS\n"
+    )
+    for key in ("PLAIN", "EXPORTED", "SPACED", "QUOTED", "SINGLE", "INLINE", "HASH_IN_QUOTES", "EMPTY", "NOEQUALS"):
+        monkeypatch.delenv(key, raising=False)
+    assert load_env(dotenv) is True
+    assert os.environ["PLAIN"] == "value1"
+    assert os.environ["EXPORTED"] == "value2"
+    assert os.environ["SPACED"] == "value3"
+    assert os.environ["QUOTED"] == "value 4"
+    assert os.environ["SINGLE"] == "v5"
+    assert os.environ["INLINE"] == "value6"
+    assert os.environ["HASH_IN_QUOTES"] == "a#b"
+    assert os.environ["EMPTY"] == ""
+    assert "NOEQUALS" not in os.environ
+
+
+def test_load_env_missing_file(tmp_path):
+    assert load_env(tmp_path / "nope.env") is False
+
+
+def test_load_env_does_not_override_existing(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLAIN", "already-set")
+    (tmp_path / ".env").write_text("PLAIN=from-file\n")
+    assert load_env(tmp_path / ".env") is True
+    assert os.environ["PLAIN"] == "already-set"
+
+
+def test_config_from_env_defaults_to_openrouter_free(monkeypatch):
+    monkeypatch.delenv("RUBIKBENCH_BASE_URL", raising=False)
+    monkeypatch.delenv("RUBIKBENCH_MODEL", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    cfg = config_from_env()
+    assert cfg.base_url == PRESETS["OpenRouter"]["base_url"]
+    assert cfg.model == OPENROUTER_FREE_MODEL
+    assert cfg.api_key == "sk-test"
+
+
+def test_config_from_env_overrides(monkeypatch):
+    monkeypatch.setenv("RUBIKBENCH_BASE_URL", "http://mock/v1")
+    monkeypatch.setenv("RUBIKBENCH_MODEL", "mock-model")
+    monkeypatch.setenv("RUBIKBENCH_API_KEY", "k")
+    monkeypatch.setenv("RUBIKBENCH_SOLVES", "3")
+    monkeypatch.setenv("RUBIKBENCH_MAX_TURNS", "10")
+    monkeypatch.setenv("RUBIKBENCH_SEED", "7")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    cfg = config_from_env()
+    assert (cfg.base_url, cfg.model, cfg.api_key) == ("http://mock/v1", "mock-model", "k")
+    assert (cfg.num_solves, cfg.max_turns, cfg.seed) == (3, 10, 7)
+
+
+def test_config_from_env_bad_knob(monkeypatch):
+    monkeypatch.setenv("RUBIKBENCH_SOLVES", "many")
+    with pytest.raises(ValueError, match="RUBIKBENCH_SOLVES"):
+        config_from_env()
+
+
+def test_apply_env_overrides_preset_key_wins_over_file(monkeypatch):
+    cfg = BenchmarkConfig(base_url=PRESETS["OpenRouter"]["base_url"], api_key="stored", model="stored-model")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "from-env")
+    monkeypatch.delenv("RUBIKBENCH_API_KEY", raising=False)
+    monkeypatch.delenv("RUBIKBENCH_MODEL", raising=False)
+    out = apply_env_overrides(cfg)
+    assert out.api_key == "from-env"
+    assert out.model == "stored-model"
+    assert out.base_url == cfg.base_url
+
+
+def test_apply_env_overrides_generic_key_first(monkeypatch):
+    cfg = BenchmarkConfig(base_url=PRESETS["OpenRouter"]["base_url"], api_key="stored")
+    monkeypatch.setenv("RUBIKBENCH_API_KEY", "generic")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "preset")
+    out = apply_env_overrides(cfg)
+    assert out.api_key == "generic"
+
+
+def test_apply_env_overrides_local_server_untouched(monkeypatch):
+    cfg = BenchmarkConfig(base_url="http://localhost:11434/v1", api_key="")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "whatever")
+    monkeypatch.delenv("RUBIKBENCH_API_KEY", raising=False)
+    out = apply_env_overrides(cfg)
+    assert out.api_key == ""

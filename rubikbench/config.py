@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_PATH = Path("rubikbench_config.json")
 
+#: A current OpenRouter free model with tool-calling support. Used as the
+#: default when running from ``.env`` without a config file, and when applying
+#: the OpenRouter preset. Override with ``RUBIKBENCH_MODEL`` in ``.env``.
+OPENROUTER_FREE_MODEL = "google/gemma-4-31b-it:free"
 
 #: Provider presets: name -> base_url, suggested model, env var for the API key.
 PRESETS: dict[str, dict[str, str]] = {
     "OpenAI": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o", "env": "OPENAI_API_KEY"},
-    "OpenRouter": {"base_url": "https://openrouter.ai/api/v1", "model": "openrouter/auto", "env": "OPENROUTER_API_KEY"},
+    "OpenRouter": {"base_url": "https://openrouter.ai/api/v1", "model": OPENROUTER_FREE_MODEL, "env": "OPENROUTER_API_KEY"},
     "DeepSeek": {"base_url": "https://api.deepseek.com", "model": "deepseek-chat", "env": "DEEPSEEK_API_KEY"},
     "Groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile", "env": "GROQ_API_KEY"},
     "Mistral": {"base_url": "https://api.mistral.ai/v1", "model": "mistral-large-latest", "env": "MISTRAL_API_KEY"},
@@ -160,3 +164,107 @@ def preset_defaults(name: str, key_from_env: bool = True) -> BenchmarkConfig:
     if key_from_env and p.get("env"):
         cfg.api_key = os.environ.get(p["env"], "")
     return cfg
+
+
+# --------------------------------------------------------------------------- .env
+
+def load_env(path: str | Path = ".env") -> bool:
+    """Load ``KEY=value`` pairs from a dotenv file into ``os.environ``.
+
+    Existing environment variables are never overridden; the file only fills
+    in values that are not already set. Handles blank lines, ``#`` comments,
+    an optional ``export`` prefix, single/double quotes around values, inline
+    comments after the value, and whitespace around ``=``. Returns True if the
+    file was found and read.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return False
+    for raw in p.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        # Cut an inline comment: a '#' that is not inside any quotes.
+        quote: str | None = None
+        cut = len(value)
+        for idx, ch in enumerate(value):
+            if ch in "'\"":
+                if quote is None:
+                    quote = ch
+                elif ch == quote:
+                    quote = None
+            elif ch == "#" and quote is None:
+                cut = idx
+                break
+        value = value[:cut].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = value
+    return True
+
+
+def preset_env_for(base_url: str) -> str | None:
+    """API key env var declared by the preset matching ``base_url``, if any."""
+    for p in PRESETS.values():
+        if p.get("base_url") == base_url and p.get("env"):
+            return p["env"]
+    return None
+
+
+#: ``RUBIKBENCH_*`` variables mapped to config fields and their parsers.
+_ENV_KNOBS: dict[str, tuple[str, Any]] = {
+    "RUBIKBENCH_SOLVES": ("num_solves", int),
+    "RUBIKBENCH_MAX_TURNS": ("max_turns", int),
+    "RUBIKBENCH_SCRAMBLE_LEN": ("scramble_len", int),
+    "RUBIKBENCH_SEED": ("seed", int),
+}
+
+
+def apply_env_overrides(cfg: BenchmarkConfig) -> BenchmarkConfig:
+    """Copy of ``cfg`` with values from the environment taking precedence.
+
+    Credentials never have to be stored in the config file: an API key in the
+    environment (e.g. ``OPENROUTER_API_KEY`` from ``.env``) wins over any key
+    saved in the file. ``RUBIKBENCH_*`` variables override the base URL, model,
+    and the common benchmark knobs. Raises ValueError on a malformed knob.
+    """
+    overrides: dict[str, Any] = {}
+    url = os.environ.get("RUBIKBENCH_BASE_URL")
+    if url:
+        overrides["base_url"] = url
+    model = os.environ.get("RUBIKBENCH_MODEL")
+    if model:
+        overrides["model"] = model
+    final_url = overrides.get("base_url", cfg.base_url)
+    key = os.environ.get("RUBIKBENCH_API_KEY") or os.environ.get(preset_env_for(final_url) or "", "")
+    if key:
+        overrides["api_key"] = key
+    for env_name, (field_name, cast) in _ENV_KNOBS.items():
+        raw = os.environ.get(env_name)
+        if raw is None or raw == "":
+            continue
+        try:
+            overrides[field_name] = cast(raw)
+        except ValueError as exc:
+            raise ValueError(f"{env_name} must be an integer, got {raw!r}") from exc
+    return replace(cfg, **overrides)
+
+
+def config_from_env() -> BenchmarkConfig:
+    """Build a full config from the environment, with no config file needed.
+
+    Defaults to the OpenRouter endpoint and a current free model, so a headless
+    run only needs an API key in ``.env`` (e.g. ``OPENROUTER_API_KEY=...``).
+    Raises ValueError on malformed ``RUBIKBENCH_*`` values.
+    """
+    base_url = os.environ.get("RUBIKBENCH_BASE_URL") or PRESETS["OpenRouter"]["base_url"]
+    model = os.environ.get("RUBIKBENCH_MODEL") or OPENROUTER_FREE_MODEL
+    return apply_env_overrides(BenchmarkConfig(base_url=base_url, model=model))
