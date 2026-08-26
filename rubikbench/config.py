@@ -7,6 +7,7 @@ import os
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 DEFAULT_CONFIG_PATH = Path("rubikbench_config.json")
 
@@ -211,12 +212,66 @@ def load_env(path: str | Path = ".env") -> bool:
     return True
 
 
+#: Host fragments -> env var holding the API key, for matching provider
+#: endpoints and any proxy hosted under their domains.
+_HOST_ENV: dict[str, str] = {
+    "openai.com": "OPENAI_API_KEY",
+    "openrouter.ai": "OPENROUTER_API_KEY",
+    "deepseek.com": "DEEPSEEK_API_KEY",
+    "groq.com": "GROQ_API_KEY",
+    "mistral.ai": "MISTRAL_API_KEY",
+}
+
+#: Local hosts never need an API key.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
 def preset_env_for(base_url: str) -> str | None:
-    """API key env var declared by the preset matching ``base_url``, if any."""
+    """API key env var declared by the preset matching ``base_url``, if any.
+
+    Matches the exact preset URL first, then by host fragment (so a proxy
+    hosted under a provider's domain still resolves to its env var).
+    """
     for p in PRESETS.values():
         if p.get("base_url") == base_url and p.get("env"):
             return p["env"]
+    host = urlparse(base_url).hostname or ""
+    for fragment, env in _HOST_ENV.items():
+        if fragment in host:
+            return env
     return None
+
+
+def api_key_source(base_url: str) -> str | None:
+    """Env var that should hold the API key for ``base_url``, if any.
+
+    ``RUBIKBENCH_API_KEY`` always wins; otherwise the preset/host-matched
+    provider var. For any other endpoint (e.g. a custom LiteLLM proxy)
+    ``OPENAI_API_KEY`` is the assumed default, since RubikBench only speaks
+    OpenAI-compatible APIs. Returns None only for local servers.
+    """
+    env = preset_env_for(base_url)
+    if env:
+        return env
+    host = urlparse(base_url).hostname or ""
+    if host in _LOCAL_HOSTS or host.endswith(".local"):
+        return None
+    return "OPENAI_API_KEY"
+
+
+def api_key_from_env(base_url: str) -> tuple[str, str | None]:
+    """``(API key, env var it came from)`` for ``base_url``.
+
+    ``RUBIKBENCH_API_KEY`` always wins over the provider-specific variable
+    (e.g. ``OPENAI_API_KEY``). Returns ``("", None)`` when no key is set or
+    the endpoint needs none.
+    """
+    source = api_key_source(base_url)
+    if source is None:
+        return "", None
+    if os.environ.get("RUBIKBENCH_API_KEY"):
+        return os.environ["RUBIKBENCH_API_KEY"], "RUBIKBENCH_API_KEY"
+    return os.environ.get(source, ""), source
 
 
 #: ``RUBIKBENCH_*`` variables mapped to config fields and their parsers.
@@ -249,7 +304,7 @@ def apply_env_overrides(cfg: BenchmarkConfig) -> BenchmarkConfig:
     if model:
         overrides["model"] = model
     final_url = overrides.get("base_url", cfg.base_url)
-    key = os.environ.get("RUBIKBENCH_API_KEY") or os.environ.get(preset_env_for(final_url) or "", "")
+    key, _ = api_key_from_env(final_url)
     if key:
         overrides["api_key"] = key
     for env_name, (field_name, cast) in _ENV_KNOBS.items():

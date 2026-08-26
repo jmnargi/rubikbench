@@ -215,9 +215,16 @@ model; everything else is optional. All supported `.env` variables:
 | `RUBIKBENCH_SEED` | Fixed scramble seed (reproducible runs). |
 
 When a config file exists, environment values take precedence for the base
-URL, model, and API key; everything else comes from the file. Run
-`uv run rubikbench validate` to check the resolved settings and
-`uv run rubikbench presets` to list providers.
+URL, model, and API key; everything else comes from the file.
+
+The API key is resolved from `RUBIKBENCH_API_KEY` first, then the env var of
+the provider whose URL (or host) matches the endpoint (`OPENAI_API_KEY`,
+`OPENROUTER_API_KEY`, ...), then `OPENAI_API_KEY` as the default for any
+other OpenAI-compatible endpoint such as a custom LiteLLM proxy. Local
+servers (`localhost`, `*.local`) need no key. Run
+`uv run rubikbench validate` to check the resolved settings and which
+variable the key came from, and `uv run rubikbench presets` to list
+providers.
 
 Run this command to list the presets:
 

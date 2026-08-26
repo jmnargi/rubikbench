@@ -45,6 +45,7 @@ async def test_full_flow_through_tui(mock, tmp_path):
         app.screen.query_one("#cache_retention", Input).value = "3600"
         app.screen.query_one("#scramble_preset", Select).value = "superflip"
         await pilot.click("#start_btn")
+        await wait_for(app, lambda a: a.result is not None)
 
         saved = json.loads(config_file.read_text())
         assert saved["model"] == "mock"
@@ -59,6 +60,7 @@ async def test_full_flow_through_tui(mock, tmp_path):
         assert server.seen_bodies[0]["prompt_cache_retention"] == 3600
 
         # results table populated
+        await wait_for(app, lambda a: a.screen.query_one("#table", DataTable).row_count == 2)
         results = app.screen
         table = results.query_one("#table", DataTable)
         assert table.row_count == 2
@@ -119,6 +121,71 @@ async def test_results_screen_for_empty_run(mock):
             assert table.row_count == 1  # placeholder "—" row for empty runs
     finally:
         path.unlink(missing_ok=True)
+
+
+def _log_text(app) -> str:
+    """Plain text of everything written to the run screen's history log."""
+    from textual.widgets import RichLog
+
+    log = app.screen.query_one("#log", RichLog)
+    return "".join(seg.text for strip in log.lines for seg in strip)
+
+
+async def test_run_screen_streams_live_output(mock, tmp_path):
+    """Streaming chunks paint into the live panel, token counters, and history."""
+    from textual.widgets import Label, Static
+
+    from rubikbench.tui.messages import StreamMsg, ToolCallMsg, ToolResultMsg
+    from rubikbench.tui.run_screen import RunScreen
+
+    class IdleRunScreen(RunScreen):
+        """Run screen without a real benchmark worker."""
+
+        def _drive(self) -> None:
+            pass
+
+    cfg = BenchmarkConfig(base_url="http://x/v1", model="mock", num_solves=1)
+    app = RubikBenchApp(config_path=tmp_path / "cfg.json")
+    app.config = cfg
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.push_screen(IdleRunScreen(cfg))
+        await pilot.pause()
+        screen = app.screen
+        assert screen.query_one("#live", Static) is not None
+        assert screen.query_one("#log") is not None
+
+        # content streams in across chunks, with a first-token time
+        screen.post_message(StreamMsg(1, "Let me ", None, None, None, 0.5))
+        await pilot.pause()
+        screen.post_message(
+            StreamMsg(1, "observe the cube.", None, {"prompt": 10, "completion": 2, "cached": 1, "total": 13}, None, None)
+        )
+        await pilot.pause()
+        live = str(screen.query_one("#live", Static).render())
+        assert "Let me observe the cube." in live
+        assert str(screen.query_one("#st-tok-in", Label).render()) == "10"
+        assert str(screen.query_one("#st-tok-out", Label).render()) == "2"
+        assert str(screen.query_one("#st-tok-cached", Label).render()) == "1"
+
+        # a tool call builds up from argument fragments
+        screen.post_message(
+            StreamMsg(2, None, [{"index": 0, "id": "c1", "name": "apply_moves", "arguments": '{"moves": "'}], None, None, None)
+        )
+        await pilot.pause()
+        screen.post_message(StreamMsg(2, None, [{"index": 0, "id": None, "name": None, "arguments": "R U'}"}], None, None, None))
+        await pilot.pause()
+        live = str(screen.query_one("#live", Static).render())
+        assert "apply_moves" in live
+        assert 'R U\'' in live
+
+        # the executed tool call and its result land in the history log
+        screen.post_message(ToolCallMsg(2, "apply_moves", {"moves": "R U'"}, "apply"))
+        await pilot.pause()
+        screen.post_message(ToolResultMsg(2, "apply_moves", "Applied 2 move(s). The cube is SOLVED."))
+        await pilot.pause()
+        text = _log_text(app)
+        assert "apply_moves" in text
+        assert "The cube is SOLVED" in text
 async def test_replay_screen_steps_and_plays(mock, tmp_path):
     """Replay screen walks a real solve's timeline and toggles playback."""
     from textual.widgets import Button, OptionList, Select

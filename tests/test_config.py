@@ -10,6 +10,8 @@ from rubikbench.config import (
     DEFAULT_CONFIG_PATH,
     PRESETS,
     BenchmarkConfig,
+    api_key_from_env,
+    api_key_source,
     apply_env_overrides,
     config_from_env,
     load_config,
@@ -249,7 +251,46 @@ def test_apply_env_overrides_generic_key_first(monkeypatch):
 
 def test_apply_env_overrides_local_server_untouched(monkeypatch):
     cfg = BenchmarkConfig(base_url="http://localhost:11434/v1", api_key="")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "whatever")
+    monkeypatch.setenv("OPENAI_API_KEY", "whatever")
     monkeypatch.delenv("RUBIKBENCH_API_KEY", raising=False)
     out = apply_env_overrides(cfg)
     assert out.api_key == ""
+
+
+def test_api_key_source_exact_preset_match():
+    assert api_key_source(PRESETS["OpenRouter"]["base_url"]) == "OPENROUTER_API_KEY"
+    assert api_key_source(PRESETS["OpenAI"]["base_url"]) == "OPENAI_API_KEY"
+
+
+def test_api_key_source_host_match():
+    # Same provider under a different path/port still resolves by host.
+    assert api_key_source("https://openrouter.ai/api/v1/extra") == "OPENROUTER_API_KEY"
+    assert api_key_source("https://proxy.example.com") == "OPENAI_API_KEY"
+
+
+def test_api_key_source_local_hosts_need_none():
+    for url in ("http://localhost:8000/v1", "http://127.0.0.1:1234/v1", "http://ollama.local:11434/v1"):
+        assert api_key_source(url) is None
+
+
+def test_api_key_from_env_custom_endpoint_uses_openai_key(monkeypatch):
+    # A custom OpenAI-compatible proxy (e.g. LiteLLM) falls back to OPENAI_API_KEY.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proxy")
+    monkeypatch.delenv("RUBIKBENCH_API_KEY", raising=False)
+    key, source = api_key_from_env("https://litellm.mycompany.com/v1")
+    assert (key, source) == ("sk-proxy", "OPENAI_API_KEY")
+
+
+def test_api_key_from_env_generic_wins(monkeypatch):
+    monkeypatch.setenv("RUBIKBENCH_API_KEY", "sk-generic")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    key, source = api_key_from_env(PRESETS["OpenAI"]["base_url"])
+    assert (key, source) == ("sk-generic", "RUBIKBENCH_API_KEY")
+
+
+def test_apply_env_overrides_custom_proxy_picks_up_openai_key(monkeypatch):
+    cfg = BenchmarkConfig(base_url="https://litellm.mycompany.com/v1", api_key="")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-proxy")
+    monkeypatch.delenv("RUBIKBENCH_API_KEY", raising=False)
+    out = apply_env_overrides(cfg)
+    assert out.api_key == "sk-proxy"

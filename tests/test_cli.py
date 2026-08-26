@@ -20,7 +20,12 @@ def mock():
 
 @pytest.fixture(autouse=True)
 def _clean_rubikbench_env(monkeypatch):
-    """Isolate tests from any real .env the developer may have."""
+    """Isolate tests from any real .env the developer may have.
+
+    Values are set to the empty string rather than deleted: load_env() only
+    fills variables that are not already set, so this also stops the app's
+    .env loader from re-importing the real file during a test run.
+    """
     for name in (
         "RUBIKBENCH_API_KEY",
         "RUBIKBENCH_BASE_URL",
@@ -37,7 +42,7 @@ def _clean_rubikbench_env(monkeypatch):
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
     ):
-        monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv(name, "")
 
 
 def _write_config(tmp_path, url: str) -> str:

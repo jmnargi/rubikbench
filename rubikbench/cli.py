@@ -18,11 +18,12 @@ from .benchmark import BenchmarkRunner, export_jsonl
 from .config import (
     DEFAULT_CONFIG_PATH,
     PRESETS,
+    api_key_from_env,
+    api_key_source,
     apply_env_overrides,
     config_from_env,
     load_config,
     load_env,
-    preset_env_for,
 )
 from .llm import OpenAICompatibleClient
 
@@ -91,9 +92,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"error: invalid config: {exc}", file=sys.stderr)
         return 2
 
-    if not cfg.api_key and preset_env_for(cfg.base_url):
+    if not cfg.api_key and api_key_source(cfg.base_url):
         print(
-            f"error: no API key set; add {preset_env_for(cfg.base_url)}=... (or RUBIKBENCH_API_KEY=...) to .env",
+            f"error: no API key set; add {api_key_source(cfg.base_url)}=... (or RUBIKBENCH_API_KEY=...) to .env",
             file=sys.stderr,
         )
         return 2
@@ -197,11 +198,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - surface config errors
         print(f"invalid: {exc}", file=sys.stderr)
         return 1
-    preset_env = preset_env_for(cfg.base_url)
-    if cfg.api_key:
-        key_state = "set (from environment)"
-    elif preset_env:
-        key_state = f"not set (add {preset_env}=... or RUBIKBENCH_API_KEY=... to .env)"
+    env_key, env_source = api_key_from_env(cfg.base_url)
+    if env_key:
+        key_state = f"set (from {env_source})"
+    elif cfg.api_key:
+        key_state = "set (from config file)"
+    elif api_key_source(cfg.base_url):
+        key_state = f"not set (add {api_key_source(cfg.base_url)}=... or RUBIKBENCH_API_KEY=... to .env)"
     else:
         key_state = "not set (local server needs no key)"
     print(

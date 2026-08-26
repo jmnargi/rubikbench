@@ -52,6 +52,48 @@ class TurnMsg(Message):
         self.latency = latency
 
 
+class StreamMsg(Message):
+    """One streaming chunk of the model's reply (content / tool-call fragments)."""
+
+    def __init__(
+        self,
+        turn: int,
+        content: str | None,
+        tool_calls: list[dict[str, Any]] | None,
+        usage: dict[str, int] | None,
+        finish_reason: str | None,
+        ttft: float | None,
+    ) -> None:
+        super().__init__()
+        self.turn = turn
+        self.content = content
+        self.tool_calls = tool_calls
+        self.usage = usage
+        self.finish_reason = finish_reason
+        self.ttft = ttft
+
+
+class ToolCallMsg(Message):
+    """A tool call was issued and is about to execute."""
+
+    def __init__(self, turn: int, name: str, arguments: dict[str, Any], action: str) -> None:
+        super().__init__()
+        self.turn = turn
+        self.name = name
+        self.arguments = arguments
+        self.action = action
+
+
+class ToolResultMsg(Message):
+    """A tool call finished and returned its text result."""
+
+    def __init__(self, turn: int, name: str, content: str) -> None:
+        super().__init__()
+        self.turn = turn
+        self.name = name
+        self.content = content
+
+
 class SolveDoneMsg(Message):
     def __init__(self, index: int, total: int, solve: Any) -> None:
         super().__init__()

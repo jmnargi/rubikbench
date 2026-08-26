@@ -281,6 +281,10 @@ def run_solve(
     def cancelled() -> bool:
         return cancel_event is not None and cancel_event.is_set()
 
+    def emit_stream_chunk(chunk: dict[str, Any]) -> None:
+        # One SSE chunk of the model's reply; forwarded so UIs can paint live.
+        _emit(emitter, "stream", index=index, turn=turns + 1, **chunk)
+
     _emit(emitter, "solve_started", index=index, scramble=scramble_to_string(scramble), par=0)
     push_timeline("start", [])
 
@@ -300,7 +304,12 @@ def run_solve(
                 _emit(emitter, "log", index=index, level="warn",
                       message=f"Turn {turns + 1}: trimmed conversation history to fit max input tokens ({cfg.max_input_tokens}).")
             try:
-                turn = client.complete(request_messages, TOOLS, cfg.effective_extra_body())
+                turn = client.complete(
+                    request_messages,
+                    TOOLS,
+                    cfg.effective_extra_body(),
+                    on_chunk=emit_stream_chunk if emitter is not None else None,
+                )
                 break
             except LLMError as exc:
                 _emit(emitter, "log", index=index, level="error",
@@ -362,10 +371,13 @@ def run_solve(
                 proposed: list[str] = []
                 if tc.name == "apply_moves":
                     proposed, _ = parse_moves(str(args.get("moves", "") or ""))
+                _emit(emitter, "tool_call", index=index, turn=turns, name=tc.name,
+                      arguments=tc.arguments, action=action)
                 try:
                     result_text = execute_tool(tc.name, args, ctx)
                 except Exception as exc:  # noqa: BLE001 - feed any tool failure back so the model can retry
                     result_text = f"Tool error: {tc.name} failed ({exc}). Check your arguments and try again."
+                _emit(emitter, "tool_result", index=index, turn=turns, name=tc.name, content=result_text)
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
                 transcript.append({
                     "turn": turns, "role": "tool", "name": tc.name,

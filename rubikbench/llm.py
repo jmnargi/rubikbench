@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -55,6 +56,7 @@ class LLMClient(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         extra_body: dict[str, Any] | None = None,
+        on_chunk: Callable[[dict[str, Any]], None] | None = None,
     ) -> AssistantTurn: ...
 
 
@@ -97,6 +99,7 @@ class OpenAICompatibleClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         extra_body: dict[str, Any] | None = None,
+        on_chunk: Callable[[dict[str, Any]], None] | None = None,
     ) -> AssistantTurn:
         body = {**self._extra_body, **(extra_body or {})}
         kwargs: dict[str, Any] = {"model": self._model, "messages": messages, "extra_body": body}
@@ -106,12 +109,17 @@ class OpenAICompatibleClient:
             kwargs["tool_choice"] = self._tool_choice
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
+        if self._stream:
+            # Ask the server to include usage in the stream so live token counts
+            # can be shown; supported by OpenAI-compatible servers (LiteLLM
+            # proxies included).
+            kwargs.setdefault("stream_options", {"include_usage": True})
 
         started = time.monotonic()
         self._request_started = started
         try:
             if self._stream:
-                turn = self._complete_stream(**kwargs)
+                turn = self._complete_stream(on_chunk=on_chunk, **kwargs)
             else:
                 response = self._client.chat.completions.create(**kwargs)
                 turn = self._parse_response(response)
@@ -138,7 +146,11 @@ class OpenAICompatibleClient:
         return prompt, completion, cached, total
 
     # -- internals ----------------------------------------------------------
-    def _complete_stream(self, **kwargs: Any) -> AssistantTurn:
+    def _complete_stream(
+        self,
+        on_chunk: Callable[[dict[str, Any]], None] | None = None,
+        **kwargs: Any,
+    ) -> AssistantTurn:
         content_parts: list[str] = []
         slots: dict[int, dict[str, str]] = {}
         prompt_tokens = completion_tokens = cached_tokens = total_tokens = 0
@@ -151,16 +163,21 @@ class OpenAICompatibleClient:
             prompt_tokens, completion_tokens, cached_tokens, total_tokens = self._usage_fields(
                 getattr(chunk, "usage", None) or None
             )
+            delta_content: str | None = None
+            tool_deltas_out: list[dict[str, Any]] = []
+            delta_finish: str | None = None
             for choice in getattr(chunk, "choices", []) or []:
                 reason = getattr(choice, "finish_reason", None)
                 if reason:
                     finish_reason = reason
+                    delta_finish = reason
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
                 content = getattr(delta, "content", None)
                 if content:
                     content_parts.append(content)
+                    delta_content = content
                 tool_deltas = getattr(delta, "tool_calls", None) or []
                 if (content or tool_deltas) and not seen_payload:
                     seen_payload = True
@@ -175,13 +192,32 @@ class OpenAICompatibleClient:
                     if tc_id:
                         slot["id"] = tc_id
                     fn = getattr(tc, "function", None)
+                    frag_name = frag_args = None
                     if fn is not None:
                         name = getattr(fn, "name", None)
                         if name:
                             slot["name"] += name
+                            frag_name = name
                         args = getattr(fn, "arguments", None)
                         if args:
                             slot["args"] += args
+                            frag_args = args
+                    tool_deltas_out.append(
+                        {"index": idx, "id": tc_id, "name": frag_name, "arguments": frag_args}
+                    )
+            if on_chunk is not None:
+                on_chunk({
+                    "content": delta_content,
+                    "tool_calls": tool_deltas_out or None,
+                    "usage": {
+                        "prompt": prompt_tokens,
+                        "completion": completion_tokens,
+                        "cached": cached_tokens,
+                        "total": total_tokens,
+                    },
+                    "finish_reason": delta_finish,
+                    "ttft": ttft if seen_payload else None,
+                })
         tool_calls: list[ToolCall] = []
         for idx in order:
             slot = slots[idx]

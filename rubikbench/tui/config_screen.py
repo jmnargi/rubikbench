@@ -75,7 +75,6 @@ class ConfigScreen(Screen):
                         id="cache_retention", placeholder="e.g. 3600",
                     )),
                     ("Tool choice", Select(_TOOL_CHOICE_OPTIONS, value=cfg.tool_choice, id="tool_choice")),
-                    ("Stream responses", Switch(value=cfg.stream, id="stream_switch")),
                     ("Extra body params (JSON)", TextArea(json.dumps(cfg.extra_body or {}, indent=1), id="extra_body", language="json")),
                 ]
                 for label, field in rows:
@@ -160,7 +159,8 @@ class ConfigScreen(Screen):
             max_output_tokens=self._opt_int("max_output_tokens"),
             max_input_tokens=self._opt_int("max_input_tokens"),
             cache_retention=self._opt_int("cache_retention"),
-            stream=self.query_one("#stream_switch", Switch).value,
+            # stream is always True in the TUI (live output); headless runs
+            # control it via the config file.
             tool_choice=self.query_one("#tool_choice", Select).value or "auto",
             num_solves=self._int("num_solves", 5),
             max_turns=self._int("max_turns", 40),

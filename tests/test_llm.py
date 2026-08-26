@@ -88,6 +88,38 @@ def test_client_streaming_assembles_tool_args(mock):
     assert turn.prompt_tokens == 12
 
 
+def test_client_streaming_on_chunk_reports_deltas(mock):
+    """on_chunk fires per SSE chunk with content, tool-call, and usage deltas."""
+    _, url = mock
+    client = make_client(url, stream=True)
+
+    content_chunks: list[dict] = []
+    turn = client.complete(
+        [
+            {"role": "user", "content": "Scramble (2 moves): R U"},
+            {"role": "tool", "tool_call_id": "call_x", "content": "ok"},
+        ],
+        [],
+        on_chunk=content_chunks.append,
+    )
+    assert turn.content == "The cube is solved."
+    joined = "".join(c.get("content") or "" for c in content_chunks)
+    assert joined == "The cube is solved."
+    assert any(c.get("usage") and c["usage"]["total"] == 19 for c in content_chunks)
+    assert content_chunks[-1]["finish_reason"] == "stop"
+
+    tool_chunks: list[dict] = []
+    client.complete(
+        [{"role": "user", "content": "Scramble (2 moves): R U"}],
+        [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
+        on_chunk=tool_chunks.append,
+    )
+    deltas = [tc for c in tool_chunks for tc in (c.get("tool_calls") or [])]
+    assert deltas
+    assert any(d.get("name") for d in deltas)
+    assert any(d.get("arguments") for d in deltas)
+
+
 def test_client_surfaces_http_errors():
     server, url = start_mock_server(fail_first_n=1, status=429)
     try:
@@ -153,6 +185,28 @@ def test_solve_loop_streaming_e2e(mock):
     result = run_solve(0, ["R", "U"], base_cfg(stream=True), make_client(url, stream=True))
     assert result.solved
     assert result.turns == 1
+
+
+def test_solve_loop_streams_chunks_and_tool_events(mock):
+    """The emitter receives per-chunk stream events plus tool call/result events."""
+    _, url = mock
+    events: list[tuple[str, dict]] = []
+
+    def emitter(kind: str, payload: dict) -> None:
+        events.append((kind, payload))
+
+    result = run_solve(0, ["R", "U"], base_cfg(stream=True), make_client(url, stream=True), emitter=emitter)
+    assert result.solved
+    kinds = [k for k, _ in events]
+    assert "stream" in kinds
+    # tool-call deltas flowed through as chunks (the mock solves via tools)
+    chunks = [p for k, p in events if k == "stream"]
+    assert any(c.get("tool_calls") for c in chunks)
+    # the final chunk carries usage for live token counters
+    assert any(c.get("usage") and c["usage"]["total"] > 0 for c in chunks)
+    assert "tool_call" in kinds and "tool_result" in kinds
+    tool_events = [p for k, p in events if k == "tool_call"]
+    assert {t["name"] for t in tool_events} == {"get_cube_state", "apply_moves"}
 
 
 def test_retry_then_success(mock):
@@ -240,14 +294,14 @@ class FixedContentClient:
     def __init__(self, content: str):
         self.content = content
 
-    def complete(self, messages, tools, extra_body):
+    def complete(self, messages, tools, extra_body, on_chunk=None):
         return AssistantTurn(content=self.content)
 
 
 class TextSolverClient:
     """Solves by writing the moves as plain text (no tool calls)."""
 
-    def complete(self, messages, tools, extra_body):
+    def complete(self, messages, tools, extra_body, on_chunk=None):
         solution = self._solution(messages)
         return AssistantTurn(content=scramble_to_string(solution))
 
@@ -378,9 +432,9 @@ class RecordingClient:
         self.inner = inner
         self.seen: list[list[dict]] = []
 
-    def complete(self, messages, tools, extra_body):
+    def complete(self, messages, tools, extra_body, on_chunk=None):
         self.seen.append(list(messages))
-        return self.inner.complete(messages, tools, extra_body)
+        return self.inner.complete(messages, tools, extra_body, on_chunk=on_chunk)
 
 
 def test_max_output_tokens_sent_in_body(mock):
