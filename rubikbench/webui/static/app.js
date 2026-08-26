@@ -194,10 +194,16 @@ const tick = () => {
     if (target !== pi) {
       if (target >= tl.length - 1 && (tl[tl.length - 1].t ?? 0) <= playhead) {
         // reached the end
-        if (el('loop').checked) { pi = 0; playhead = 0; }
-        else { playing = false; btnPlay.textContent = 'Play'; }
+        if (el('loop').checked) {
+          goTo(0); // restart from the beginning
+        } else {
+          playing = false;
+          btnPlay.textContent = 'Play';
+          goTo(target); // park on the final state
+        }
+      } else {
+        goTo(target);
       }
-      goTo(target);
     }
   }
   requestAnimationFrame(tick);

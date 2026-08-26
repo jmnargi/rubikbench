@@ -142,7 +142,19 @@ def test_view_handler_serves_page_and_assets(mock, tmp_path):
     try:
         page = urllib.request.urlopen(base + "/", timeout=5).read().decode()
         assert "window.RUN = " in page and "RubikBench replay" in page
-        js = urllib.request.urlopen(base + "/app.js", timeout=5).read().decode()
+        # query strings and /index.html must reach the same page (the embedded
+        # dataset regenerates created_at per request, so compare without it)
+        import re as _re
+
+        def payload(html: str) -> dict:
+            match = _re.search(r"window\.RUN = (\{.*?\})\s*</script>", html, _re.DOTALL)
+            data = json.loads(match.group(1))
+            data.pop("created_at", None)
+            return data
+
+        assert payload(urllib.request.urlopen(base + "/?x=1", timeout=5).read().decode()) == payload(page)
+        assert payload(urllib.request.urlopen(base + "/index.html", timeout=5).read().decode()) == payload(page)
+        js = urllib.request.urlopen(base + "/app.js?v=2", timeout=5).read().decode()
         assert "three" in js
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(base + "/missing", timeout=5)

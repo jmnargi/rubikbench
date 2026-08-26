@@ -116,6 +116,76 @@ def test_run_solve_collects_analytics_and_timeline(mock):
     assert assistant
     assert all(e.get("prompt_tokens") and e.get("finish_reason") for e in assistant)
     assert all("cached_tokens" in e and "ttft" in e for e in assistant)
+def test_aggregates_include_avg_time_and_cache_totals(mock):
+    _, url = mock
+    result = BenchmarkRunner(base_cfg(base_url=url, num_solves=2), make_client(url)).run()
+    agg = result.aggregates()
+    assert agg["avg_time"] > 0
+    assert agg["total_cached_tokens"] > 0
+
+
+def test_sdk_internal_retries_disabled():
+    """The loop owns retries; the SDK must not multiply them."""
+    import rubikbench.llm as llm_mod
+
+    client = llm_mod.OpenAICompatibleClient(
+        base_url="http://localhost:1/v1", api_key="k", model="m", max_retries=3
+    )
+    assert client._client.max_retries == 0  # SDK must not double-retry
+
+def test_non_dict_tool_arguments_do_not_crash_run():
+    """A model sending valid JSON with the wrong shape must not kill the run."""
+    import json as _json
+    import re as _re
+
+    from rubikbench.solver_ref import solve_standard
+
+    def weird_agent(body):
+        messages = body.get("messages", [])
+        if not any(m.get("role") == "tool" for m in messages):
+            # First completion: apply_moves with LIST arguments (invalid shape).
+            return {
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_weird",
+                    "type": "function",
+                    "function": {
+                        "name": "apply_moves",
+                        "arguments": _json.dumps(["R U R' U'"]),  # a list, not an object
+                    },
+                }],
+            }
+        # Recover: solve the (unchanged) initial state from the first user message.
+        solution: list[str] = []
+        for m in messages:
+            if m.get("role") != "user":
+                continue
+            match = _re.search(r"Facelet string \([^)]*\):\s*([URFDLB]{54})", m.get("content") or "")
+            if match:
+                solution = solve_standard(match.group(1)) or []
+                break
+        return {
+            "content": None,
+            "tool_calls": [{
+                "id": "call_recover",
+                "type": "function",
+                "function": {
+                    "name": "apply_moves",
+                    "arguments": _json.dumps({"moves": " ".join(solution)}),
+                },
+            }],
+        }
+
+    server, url = start_mock_server(agent=weird_agent)
+    try:
+        result = run_solve(0, scramble, base_cfg(base_url=url), make_client(url))
+        assert result.solved
+        assert any(
+            e.get("role") == "tool" and "No moves provided" in e.get("content", "")
+            for e in result.transcript
+        ), "the model should have received a recoverable error message"
+    finally:
+        server.shutdown()
 
 
 def test_retries_counted_in_solve():

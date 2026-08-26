@@ -158,6 +158,7 @@ class BenchmarkResult:
             "avg_moves": round(sum(moves) / len(moves), 2) if solved else 0.0,
             "avg_turns": round(sum(turns) / len(turns), 2) if solved else 0.0,
             "avg_tool_calls": round(sum(tools) / len(tools), 2) if solved else 0.0,
+            "avg_time": round(sum(s.elapsed for s in solved) / len(solved), 2) if solved else 0.0,
             "total_prompt_tokens": sum(s.prompt_tokens for s in self.solves),
             "total_completion_tokens": sum(s.completion_tokens for s in self.solves),
             "total_cached_tokens": sum(s.cached_tokens for s in self.solves),
@@ -353,11 +354,18 @@ def run_solve(
                     error = error or "aborted by user"
                     break
                 tool_calls_total += 1
+                # Guard against models that emit well-formed JSON with the wrong
+                # shape (e.g. a list for the arguments). Treat it as empty and
+                # let the tool reply with an error the model can recover from.
+                args = tc.arguments if isinstance(tc.arguments, dict) else {}
                 action = "apply" if tc.name == "apply_moves" else ("reset" if tc.name == "reset_cube" else "observe")
-                proposed = []
+                proposed: list[str] = []
                 if tc.name == "apply_moves":
-                    proposed, _ = parse_moves(str(tc.arguments.get("moves", "") or ""))
-                result_text = execute_tool(tc.name, tc.arguments, ctx)
+                    proposed, _ = parse_moves(str(args.get("moves", "") or ""))
+                try:
+                    result_text = execute_tool(tc.name, args, ctx)
+                except Exception as exc:  # noqa: BLE001 - feed any tool failure back so the model can retry
+                    result_text = f"Tool error: {tc.name} failed ({exc}). Check your arguments and try again."
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_text})
                 transcript.append({
                     "turn": turns, "role": "tool", "name": tc.name,

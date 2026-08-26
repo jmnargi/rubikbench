@@ -36,10 +36,11 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:
-        if self.path.rstrip("/") in ("", "/index.html"):
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path in ("/", "/index.html"):
             body = build_replay_document(self.server.run_path).encode()  # type: ignore[attr-defined]
             ctype = "text/html; charset=utf-8"
-        elif self.path.split("?")[0] == "/app.js":
+        elif path == "/app.js":
             body = (STATIC_DIR / "app.js").read_bytes()
             ctype = "text/javascript; charset=utf-8"
         else:

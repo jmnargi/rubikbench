@@ -80,11 +80,15 @@ class OpenAICompatibleClient:
         self._temperature = temperature
         self._extra_body = dict(extra_body or {})
         self._tool_choice = tool_choice
+        # The SDK must not retry internally: retries with backoff are owned by
+        # the benchmark turn loop (``benchmark.run_solve``), which counts them
+        # and bounds them. Internal SDK retries would multiply the configured
+        # ``max_retries`` (retryable errors would be retried twice).
         self._client = OpenAI(
             base_url=base_url,
             api_key=api_key,
             timeout=timeout,
-            max_retries=max_retries,  # we do our own retries with backoff in the loop
+            max_retries=0,
         )
 
     # -- public -------------------------------------------------------------
