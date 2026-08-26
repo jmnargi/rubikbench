@@ -108,19 +108,20 @@ async def test_results_screen_for_empty_run(mock):
         path.unlink(missing_ok=True)
 
 
-def _log_text(app) -> str:
-    """Plain text of everything written to the run screen's history log."""
-    from textual.widgets import RichLog
+def _model_text(app) -> str:
+    """Plain text of the run screen's merged model pane."""
+    from textual.widgets import Static
 
-    log = app.screen.query_one("#log", RichLog)
-    return "".join(seg.text for strip in log.lines for seg in strip)
+    return str(app.screen.query_one("#model-text", Static).render())
 
 
 async def test_run_screen_streams_live_output(mock, tmp_path):
-    """Streaming chunks paint into the live panel, token counters, and history."""
+    """Streaming chunks paint into the model pane, token counters, and history."""
     from textual.widgets import Label, Static
 
+    from rubikbench.cube import Cube
     from rubikbench.tui.messages import (
+        StateMsg,
         StreamMsg,
         ToolCallMsg,
         ToolResultMsg,
@@ -141,20 +142,34 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         app.push_screen(IdleRunScreen(cfg))
         await pilot.pause()
         screen = app.screen
-        assert screen.query_one("#live", Static) is not None
-        assert screen.query_one("#log") is not None
+        assert screen.query_one("#model-text", Static) is not None
+        assert screen.query_one("#model-scroll") is not None
 
         # a sent request shows a live waiting indicator before any chunks
         screen.post_message(TurnStartedMsg(1))
         await pilot.pause()
         assert "waiting for model" in str(screen.query_one("#run-status", Static).render())
-        assert "waiting for model" in str(screen.query_one("#live", Static).render())
+        assert "waiting for model" in _model_text(app)
 
-        # reasoning content streams in and renders in the live panel
+        # the cube pane renders colored stickers from a state event
+        screen.post_message(StateMsg(list(Cube.solved().facelets), [], 0, 1, 1, False))
+        await pilot.pause()
+        cube_text = screen.query_one("#cube-net").render()
+        styles = {str(span.style) for span in cube_text.spans}
+        assert any("ansi_red" in s for s in styles)
+        assert any("ansi_blue" in s for s in styles)
+        assert any("ansi_green" in s for s in styles)
+
+        # reasoning content streams in, rendered grey, and Ctrl+T collapses it
         screen.post_message(StreamMsg(1, None, None, None, None, None, "Let me think about the state..."))
         await pilot.pause()
-        live = str(screen.query_one("#live", Static).render())
-        assert "Let me think about the state..." in live
+        assert "Let me think about the state..." in _model_text(app)
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert "Let me think about the state..." not in _model_text(app)
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert "Let me think about the state..." in _model_text(app)
 
         # content streams in across chunks, with a first-token time
         screen.post_message(StreamMsg(1, "Let me ", None, None, None, 0.5))
@@ -163,8 +178,7 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
             StreamMsg(1, "observe the cube.", None, {"prompt": 10, "completion": 2, "cached": 1, "total": 13}, None, None)
         )
         await pilot.pause()
-        live = str(screen.query_one("#live", Static).render())
-        assert "Let me observe the cube." in live
+        assert "Let me observe the cube." in _model_text(app)
         assert str(screen.query_one("#st-tok-in", Label).render()) == "10"
         assert str(screen.query_one("#st-tok-out", Label).render()) == "2"
         assert str(screen.query_one("#st-tok-cached", Label).render()) == "1"
@@ -176,16 +190,15 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         await pilot.pause()
         screen.post_message(StreamMsg(2, None, [{"index": 0, "id": None, "name": None, "arguments": "R U'}"}], None, None, None))
         await pilot.pause()
-        live = str(screen.query_one("#live", Static).render())
-        assert "apply_moves" in live
-        assert 'R U\'' in live
+        assert "apply_moves" in _model_text(app)
+        assert 'R U\'' in _model_text(app)
 
-        # the executed tool call and its result land in the history log
+        # the executed tool call and its result land in the history
         screen.post_message(ToolCallMsg(2, "apply_moves", {"moves": "R U'"}, "apply"))
         await pilot.pause()
         screen.post_message(ToolResultMsg(2, "apply_moves", "Applied 2 move(s). The cube is SOLVED."))
         await pilot.pause()
-        text = _log_text(app)
+        text = _model_text(app)
         assert "apply_moves" in text
         assert "The cube is SOLVED" in text
 async def test_replay_screen_steps_and_plays(mock, tmp_path):

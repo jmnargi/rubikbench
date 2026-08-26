@@ -284,6 +284,9 @@ def run_solve(
         _emit(emitter, "stream", index=index, turn=turns + 1, **chunk)
 
     _emit(emitter, "solve_started", index=index, scramble=scramble_to_string(scramble), par=0)
+    _emit(emitter, "state", index=index, facelets=ctx.cube.facelets,
+          history=list(ctx.cube.history), total_moves=ctx.total_moves,
+          turns=0, tool_calls=0, solved=ctx.cube.is_solved())
     push_timeline("start", [])
 
     while turns < cfg.max_turns and not solved:
