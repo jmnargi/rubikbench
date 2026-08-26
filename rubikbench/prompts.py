@@ -14,9 +14,11 @@ half turn (e.g. U2). Move lists are space-separated, like "R U R' U'".
 Your objective: solve the cube with as few tool calls as possible. You only receive the cube
 state; you never receive the scramble. You must derive the solution yourself.
 
+The current cube state (facelet string, colored net, move history and counts) is always provided:
+it is in your initial message, and every tool result you receive includes the updated state. You
+never need to request it.
+
 You have these tools:
-- get_cube_state: return the exact current state of the cube (facelet string, colored net, move
-  history and counts). Call it only when you must observe or verify the cube.
 - apply_moves: apply one or more moves in a single call. This is the ONLY way to change the cube.
   Move text you write in your reply is not applied.
 - reset_cube: restore the original scramble (discards all moves so far; costs you turns).
@@ -31,9 +33,9 @@ You want the cube SOLVED with as few total moves, as few turns, and as few tool 
 Plan before you act:
 - Derive the full solution in your head, then apply it. One single apply_moves call is ideal.
 - Batch many moves into one apply_moves call. Never make one call per move.
-- Do not call get_cube_state unless you must check something. Every tool call costs score.
+- The tool result will tell you the new state and whether the cube is solved. Do not call any tool
+  just to observe; state comes with every result.
 - If you mess up, reset_cube is cheaper than wandering (it costs turns but no moves).
-- Verify the cube is solved with get_cube_state before declaring success.
 - When you are confident the cube is solved, reply briefly, e.g. "The cube is solved."."""
 
 
@@ -43,22 +45,11 @@ def initial_user_prompt(cube: Cube) -> str:
         "Solve the cube from this state.\n"
         f"Facelet string (faces in order U R F D L B):\n{cube.facelet_string()}\n"
         f"Cube net:\n{render_plain(cube.facelets)}\n\n"
-        "You may call get_cube_state at any time to verify."
+        "The state above is the current state. Every tool result will include the updated state."
     )
 
 
 TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_cube_state",
-            "description": (
-                "Return the exact current state of the Rubik's cube: all 54 facelets, the colored "
-                "net, the move history, and current counts. Use this to observe or verify the cube."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
     {
         "type": "function",
         "function": {

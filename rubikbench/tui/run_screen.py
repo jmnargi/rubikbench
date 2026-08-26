@@ -66,6 +66,7 @@ class RunScreen(Screen):
         # Live streaming state (updated from the UI thread via messages).
         self._live_turn: int | None = None
         self._live_content = ""
+        self._live_reasoning = ""
         self._live_tool_slots: dict[int, dict[str, str]] = {}
         self._live_ttft: float | None = None
         self._live_started = 0.0
@@ -169,10 +170,13 @@ class RunScreen(Screen):
             p = payload
             self.post_message(StreamMsg(
                 p["turn"], p.get("content"), p.get("tool_calls"), p.get("usage"),
-                p.get("finish_reason"), p.get("ttft"),
+                p.get("finish_reason"), p.get("ttft"), p.get("reasoning"),
             ))
         elif kind == "turn":
-            self.post_message(TurnMsg(payload["turn"], payload["content"], payload["tool_call_names"], payload["latency"]))
+            self.post_message(TurnMsg(
+                payload["turn"], payload["content"], payload["tool_call_names"],
+                payload["latency"], payload.get("reasoning"),
+            ))
         elif kind == "tool_call":
             self.post_message(ToolCallMsg(payload["turn"], payload["name"], payload["arguments"], payload["action"]))
         elif kind == "tool_result":
@@ -189,6 +193,7 @@ class RunScreen(Screen):
     def _start_live_turn(self, turn: int) -> None:
         self._live_turn = turn
         self._live_content = ""
+        self._live_reasoning = ""
         self._live_tool_slots = {}
         self._live_ttft = None
         self._live_started = time.monotonic()
@@ -199,6 +204,8 @@ class RunScreen(Screen):
         if self._live_ttft:
             parts[0] += f" · first token {self._live_ttft:.1f}s"
         parts[0] += f" · {time.monotonic() - self._live_started:.1f}s"
+        if self._live_reasoning:
+            parts.append(f"[dim italic]{escape(self._live_reasoning)}[/dim italic]")
         if self._live_content:
             parts.append(escape(self._live_content))
         for idx in sorted(self._live_tool_slots):
@@ -217,6 +224,8 @@ class RunScreen(Screen):
     def _on_stream(self, msg: StreamMsg) -> None:
         if msg.turn != self._live_turn:
             self._start_live_turn(msg.turn)
+        if msg.reasoning:
+            self._live_reasoning += msg.reasoning
         if msg.content:
             self._live_content += msg.content
         for tc in msg.tool_calls or []:
@@ -264,18 +273,21 @@ class RunScreen(Screen):
             names = ", ".join(escape(n) for n in msg.tool_call_names)
             line += f" · [cyan]tools: {names}[/cyan]"
         log.write(line)
+        if msg.reasoning and msg.reasoning.strip():
+            log.write(f"[dim italic]{escape(msg.reasoning.strip())}[/dim italic]")
         if msg.content and msg.content.strip():
             log.write(escape(msg.content.strip()))
         # The turn is complete: the live panel starts fresh for the next one.
         self._live_turn = None
         self._live_content = ""
+        self._live_reasoning = ""
         self._live_tool_slots = {}
         self._live_ttft = None
 
     @on(ToolCallMsg)
     def _on_tool_call(self, msg: ToolCallMsg) -> None:
         args = escape(json.dumps(msg.arguments, ensure_ascii=False) if msg.arguments else "{}")
-        icon = {"apply": "🔧", "reset": "↺", "observe": "👁"}.get(msg.action, "→")
+        icon = {"apply": "🔧", "reset": "↺"}.get(msg.action, "→")
         self.query_one("#log", RichLog).write(
             f"{icon} [bold cyan]{escape(msg.name)}[/bold cyan]({args})"
         )

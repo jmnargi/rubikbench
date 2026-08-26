@@ -139,6 +139,12 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         assert screen.query_one("#live", Static) is not None
         assert screen.query_one("#log") is not None
 
+        # reasoning content streams in and renders in the live panel
+        screen.post_message(StreamMsg(1, None, None, None, None, None, "Let me think about the state..."))
+        await pilot.pause()
+        live = str(screen.query_one("#live", Static).render())
+        assert "Let me think about the state..." in live
+
         # content streams in across chunks, with a first-token time
         screen.post_message(StreamMsg(1, "Let me ", None, None, None, 0.5))
         await pilot.pause()

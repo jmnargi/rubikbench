@@ -2,7 +2,9 @@
 
 RubikBench tests how well a large language model (LLM) can solve a 3x3x3 Rubik's cube.
 
-The model uses tools to observe the cube and to apply moves to it. The benchmark runs on its own. It connects to any OpenAI-compatible endpoint.
+The model uses tools to apply moves to the cube; the current cube state is
+always provided with every message. The benchmark runs on its own. It connects
+to any OpenAI-compatible endpoint.
 
 RubikBench has a Textual TUI. The TUI has three screens:
 
@@ -92,11 +94,16 @@ For each solve, the benchmark does these steps:
    - An API error stops the run.
    - You abort the run.
 
-The model has three tools:
+The model has two tools:
 
-- `get_cube_state` — returns the current state of the cube. It returns the 54 facelets, the colored net, and the move history.
 - `apply_moves` — applies one or more moves in one call. The moves use Singmaster notation, for example "R U R' U'". Invalid tokens are not applied.
 - `reset_cube` — returns the cube to the original scramble. It costs conversation turns. It does not add moves.
+
+The current cube state is always provided: it is in the initial message, and
+every tool result includes the updated state. There is no `get_cube_state`
+tool, so the model never wastes a call on observation. Reasoning models'
+chain-of-thought (when the provider sends it) streams live alongside the
+answer and is recorded in the transcript.
 
 The model can apply many moves in one tool call. It can also make more than one tool call in one reply.
 

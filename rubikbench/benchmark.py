@@ -71,8 +71,6 @@ class SolveContext:
 
 def execute_tool(name: str, arguments: dict[str, Any], ctx: SolveContext) -> str:
     cube = ctx.cube
-    if name == "get_cube_state":
-        return ctx.state_text()
     if name == "apply_moves":
         moves_text = str(arguments.get("moves", "") or "").strip()
         if not moves_text:
@@ -335,6 +333,7 @@ def run_solve(
             finish_reasons.append(turn.finish_reason)
         transcript.append({
             "turn": turns, "role": "assistant", "content": turn.content,
+            "reasoning": turn.reasoning,
             "tool_calls": [{"name": tc.name, "id": tc.id, "arguments": tc.arguments} for tc in turn.tool_calls],
             "latency": round(turn.latency, 3), "ttft": round(turn.ttft, 3),
             "prompt_tokens": turn.prompt_tokens, "completion_tokens": turn.completion_tokens,
@@ -342,6 +341,7 @@ def run_solve(
             "finish_reason": turn.finish_reason,
         })
         _emit(emitter, "turn", index=index, turn=turns, content=turn.content,
+              reasoning=turn.reasoning,
               tool_call_names=[tc.name for tc in turn.tool_calls], latency=turn.latency)
 
         assistant_msg: dict[str, Any] = {"role": "assistant"}
@@ -368,7 +368,7 @@ def run_solve(
                 # shape (e.g. a list for the arguments). Treat it as empty and
                 # let the tool reply with an error the model can recover from.
                 args = tc.arguments if isinstance(tc.arguments, dict) else {}
-                action = "apply" if tc.name == "apply_moves" else ("reset" if tc.name == "reset_cube" else "observe")
+                action = "apply" if tc.name == "apply_moves" else "reset"
                 proposed: list[str] = []
                 if tc.name == "apply_moves":
                     proposed, _ = parse_moves(str(args.get("moves", "") or ""))

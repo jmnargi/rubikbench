@@ -96,7 +96,6 @@ def test_headless_run_from_env_no_config(mock, tmp_path, capsys, monkeypatch):
     assert out.is_file()
     # the run reports live progress: waiting lines, tool calls, and results
     assert "waiting for model" in captured.err
-    assert "→ get_cube_state" in captured.err
     assert "→ apply_moves" in captured.err
     assert "SOLVED" in captured.err
 

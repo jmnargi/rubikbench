@@ -64,10 +64,9 @@ def test_client_parses_tool_calls(mock):
         [{"role": "user", "content": "Scramble (2 moves): R U"}],
         [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
     )
-    assert len(turn.tool_calls) == 2
-    assert turn.tool_calls[0].name == "get_cube_state"
-    assert turn.tool_calls[1].name == "apply_moves"
-    assert turn.tool_calls[1].arguments["moves"] == "U' R'"
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].name == "apply_moves"
+    assert turn.tool_calls[0].arguments["moves"] == "U' R'"
     assert turn.latency >= 0
     # extra_body is flattened into the request body by the SDK
     assert server.seen_bodies[0]["reasoning_effort"] == "high"
@@ -80,8 +79,8 @@ def test_client_streaming_assembles_tool_args(mock):
         [{"role": "user", "content": "Scramble (2 moves): R U"}],
         [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
     )
-    assert len(turn.tool_calls) == 2
-    applied = turn.tool_calls[1]
+    assert len(turn.tool_calls) == 1
+    applied = turn.tool_calls[0]
     assert applied.name == "apply_moves"
     assert applied.arguments == {"moves": "U' R'"}
     assert applied.raw == json.dumps({"moves": "U' R'"})
@@ -103,8 +102,12 @@ def test_client_streaming_on_chunk_reports_deltas(mock):
         on_chunk=content_chunks.append,
     )
     assert turn.content == "The cube is solved."
+    # reasoning content streams through and lands on the turn
+    assert turn.reasoning == "I inverted the scramble to solve it."
     joined = "".join(c.get("content") or "" for c in content_chunks)
     assert joined == "The cube is solved."
+    reasoning_joined = "".join(c.get("reasoning") or "" for c in content_chunks)
+    assert reasoning_joined == "I inverted the scramble to solve it."
     assert any(c.get("usage") and c["usage"]["total"] == 19 for c in content_chunks)
     assert content_chunks[-1]["finish_reason"] == "stop"
 
@@ -171,12 +174,12 @@ def test_solve_loop_e2e_solves_via_tools(mock):
     assert result.solved
     assert result.error is None
     assert result.turns == 1
-    assert result.tool_calls == 2
+    assert result.tool_calls == 1
     assert result.total_moves == len(scramble)
     assert result.par >= 1
     assert result.score > 0
     assert result.breakdown["solved"] is True
-    assert len(result.transcript) >= 3  # assistant + 2 tool results
+    assert len(result.transcript) >= 2  # assistant + 1 tool result
     assert result.scramble == scramble
 
 
@@ -206,7 +209,7 @@ def test_solve_loop_streams_chunks_and_tool_events(mock):
     assert any(c.get("usage") and c["usage"]["total"] > 0 for c in chunks)
     assert "tool_call" in kinds and "tool_result" in kinds
     tool_events = [p for k, p in events if k == "tool_call"]
-    assert {t["name"] for t in tool_events} == {"get_cube_state", "apply_moves"}
+    assert {t["name"] for t in tool_events} == {"apply_moves"}
 
 
 def test_retry_then_success(mock):

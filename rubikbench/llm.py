@@ -40,6 +40,8 @@ class ToolCall:
 @dataclass
 class AssistantTurn:
     content: str | None
+    #: Chain-of-thought from reasoning models (reasoning_content / reasoning).
+    reasoning: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -152,6 +154,7 @@ class OpenAICompatibleClient:
         **kwargs: Any,
     ) -> AssistantTurn:
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         slots: dict[int, dict[str, str]] = {}
         prompt_tokens = completion_tokens = cached_tokens = total_tokens = 0
         finish_reason: str | None = None
@@ -164,6 +167,7 @@ class OpenAICompatibleClient:
                 getattr(chunk, "usage", None) or None
             )
             delta_content: str | None = None
+            delta_reasoning: str | None = None
             tool_deltas_out: list[dict[str, Any]] = []
             delta_finish: str | None = None
             for choice in getattr(chunk, "choices", []) or []:
@@ -178,8 +182,14 @@ class OpenAICompatibleClient:
                 if content:
                     content_parts.append(content)
                     delta_content = content
+                # Reasoning models (DeepSeek, some OpenRouter models) emit the
+                # chain of thought in reasoning_content / reasoning.
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if reasoning:
+                    reasoning_parts.append(reasoning)
+                    delta_reasoning = reasoning
                 tool_deltas = getattr(delta, "tool_calls", None) or []
-                if (content or tool_deltas) and not seen_payload:
+                if (content or reasoning or tool_deltas) and not seen_payload:
                     seen_payload = True
                     ttft = time.monotonic() - self._request_started
                 for tc in tool_deltas:
@@ -208,6 +218,7 @@ class OpenAICompatibleClient:
             if on_chunk is not None:
                 on_chunk({
                     "content": delta_content,
+                    "reasoning": delta_reasoning,
                     "tool_calls": tool_deltas_out or None,
                     "usage": {
                         "prompt": prompt_tokens,
@@ -228,8 +239,10 @@ class OpenAICompatibleClient:
                 arguments = {"_unparsed": raw}
             tool_calls.append(ToolCall(id=slot["id"] or f"call_{idx}", name=slot["name"], arguments=arguments, raw=raw))
         content = "".join(content_parts) if content_parts else None
+        reasoning = "".join(reasoning_parts) if reasoning_parts else None
         return AssistantTurn(
             content=content,
+            reasoning=reasoning,
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -244,6 +257,9 @@ class OpenAICompatibleClient:
         choice = choices[0] if choices else None
         message = getattr(choice, "message", None) if choice is not None else None
         content = getattr(message, "content", None) if message is not None else None
+        reasoning = None
+        if message is not None:
+            reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
         finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
         tool_calls: list[ToolCall] = []
         for tc in getattr(message, "tool_calls", None) or []:
@@ -266,6 +282,7 @@ class OpenAICompatibleClient:
         )
         return AssistantTurn(
             content=content,
+            reasoning=reasoning,
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,

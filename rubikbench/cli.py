@@ -182,12 +182,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             attempt = f" (retry {payload['attempt']})" if payload["attempt"] > 1 else ""
             _print_progress_line(f"  turn {payload['turn']}: waiting for model{attempt}...", not args.no_color)
         elif kind == "stream":
-            content = payload.get("content")
-            if content:
+            for text in (payload.get("reasoning"), payload.get("content")):
+                if not text:
+                    continue
                 if not stream_state["active"]:
                     sys.stderr.write("  ")
                     stream_state["active"] = True
-                sys.stderr.write(content)
+                sys.stderr.write(text)
                 sys.stderr.flush()
         elif kind == "tool_call":
             end_stream_line()

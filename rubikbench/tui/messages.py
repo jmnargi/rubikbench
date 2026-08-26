@@ -44,12 +44,20 @@ class LogMsg(Message):
 
 
 class TurnMsg(Message):
-    def __init__(self, turn: int, content: str | None, tool_call_names: list[str], latency: float) -> None:
+    def __init__(
+        self,
+        turn: int,
+        content: str | None,
+        tool_call_names: list[str],
+        latency: float,
+        reasoning: str | None = None,
+    ) -> None:
         super().__init__()
         self.turn = turn
         self.content = content
         self.tool_call_names = tool_call_names
         self.latency = latency
+        self.reasoning = reasoning
 
 
 class StreamMsg(Message):
@@ -63,6 +71,7 @@ class StreamMsg(Message):
         usage: dict[str, int] | None,
         finish_reason: str | None,
         ttft: float | None,
+        reasoning: str | None = None,
     ) -> None:
         super().__init__()
         self.turn = turn
@@ -71,6 +80,7 @@ class StreamMsg(Message):
         self.usage = usage
         self.finish_reason = finish_reason
         self.ttft = ttft
+        self.reasoning = reasoning
 
 
 class ToolCallMsg(Message):

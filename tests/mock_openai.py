@@ -1,10 +1,10 @@
 """In-process OpenAI-compatible mock server used by tests.
 
 Implements POST /v1/chat/completions (plain JSON and SSE streaming) with a
-scripted agent: it reads the scramble from the first user message and solves the
-cube by calling get_cube_state plus apply_moves with the inverse sequence,
-finally replying with plain text. Lets us exercise the full benchmark loop
-against a real HTTP endpoint without any external service.
+scripted agent: it reads the cube state from the first user message and solves
+it by calling apply_moves with the inverse sequence, finally replying with
+plain text (including reasoning content). Lets us exercise the full benchmark
+loop against a real HTTP endpoint without any external service.
 """
 
 from __future__ import annotations
@@ -49,32 +49,29 @@ def default_agent(body: dict[str, Any]) -> dict[str, Any]:
     solution = _solve_for(messages)
     has_tool_result = any(m.get("role") == "tool" for m in messages)
     if not has_tool_result and solution:
-        tool_calls = [
-            {
-                "id": "call_observe",
-                "type": "function",
-                "function": {"name": "get_cube_state", "arguments": "{}"},
-            },
-            {
-                "id": "call_apply",
-                "type": "function",
-                "function": {
-                    "name": "apply_moves",
-                    "arguments": json.dumps({"moves": " ".join(solution)}),
-                },
-            },
-        ]
-        return {"content": None, "tool_calls": tool_calls}
+        return {
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_apply",
+                    "type": "function",
+                    "function": {
+                        "name": "apply_moves",
+                        "arguments": json.dumps({"moves": " ".join(solution)}),
+                    },
+                }
+            ],
+        }
     if solution:
-        return {"content": "The cube is solved.", "tool_calls": None}
+        return {"content": "The cube is solved.", "reasoning": "I inverted the scramble to solve it."}
     # Could not derive a solution (e.g. a direct client test with placeholder
-    # content): just observe, so the loop stays non-degenerate.
+    # content): apply a trivial no-op so the loop stays non-degenerate.
     return {
         "content": None,
         "tool_calls": [{
-            "id": "call_observe",
+            "id": "call_apply",
             "type": "function",
-            "function": {"name": "get_cube_state", "arguments": "{}"},
+            "function": {"name": "apply_moves", "arguments": json.dumps({"moves": "R R'"})},
         }],
     }
 
@@ -92,6 +89,8 @@ def build_response(reply: dict[str, Any], model: str = "mock") -> dict[str, Any]
     message: dict[str, Any] = {"role": "assistant"}
     if reply.get("content") is not None:
         message["content"] = reply["content"]
+    if reply.get("reasoning"):
+        message["reasoning_content"] = reply["reasoning"]
     if reply.get("tool_calls"):
         message["tool_calls"] = reply["tool_calls"]
     return {
@@ -171,6 +170,11 @@ class _Handler(BaseHTTPRequestHandler):
             "prompt_tokens_details": {"cached_tokens": 4},
         }
         emit({"choices": [{"delta": {"role": "assistant", "content": ""}, "index": 0}]})
+        reasoning = reply.get("reasoning")
+        if reasoning:
+            half = max(1, len(reasoning) // 2)
+            emit({"choices": [{"delta": {"reasoning_content": reasoning[:half]}, "index": 0}]})
+            emit({"choices": [{"delta": {"reasoning_content": reasoning[half:]}, "index": 0}]})
         content = reply.get("content")
         if content:
             emit({"choices": [{"delta": {"content": content}, "index": 0}]})
