@@ -85,7 +85,7 @@ You can abort the run. Use the "Abort" button.
 For each solve, the benchmark does these steps:
 
 1. Get the scramble from the starting scramble set. The default set is random. The default length is 22 moves. The generator does not repeat the same face two times in a row.
-2. Show the scramble to the model.
+2. Give the cube state to the model. The model does not receive the scramble. It must solve the cube from the state alone.
 3. Ask the model for a reply. Each reply is one conversation turn.
 4. Execute the tool calls in the reply.
 5. Check the cube. If it is solved, the solve is complete.

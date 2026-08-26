@@ -19,23 +19,36 @@ from typing import Any
 from rubikbench.scramble import solution_for_scramble
 
 SCRAMBLE_RE = re.compile(r"Scramble \(\d+ moves\): (.+)")
+FACELET_RE = re.compile(r"Facelet string \([^)]*\):\s*([URFDLB]{54})")
+
+
+def _solve_for(messages: list[dict[str, Any]]) -> list[str]:
+    """Solve the state described in the first user message, from the facelet
+    string when present (current prompt) or the scramble line (legacy prompts).
+    """
+    for m in messages:
+        if m["role"] != "user":
+            continue
+        content = m.get("content") or ""
+        facelet_match = FACELET_RE.search(content)
+        if facelet_match:
+            from rubikbench.solver_ref import solve_standard
+
+            solution = solve_standard(facelet_match.group(1))
+            if solution is not None:
+                return solution
+        scramble_match = SCRAMBLE_RE.search(content)
+        if scramble_match:
+            return solution_for_scramble(scramble_match.group(1).split())
+    return []
 
 
 def default_agent(body: dict[str, Any]) -> dict[str, Any]:
     """Return chat completion fields (content/tool_calls) for a request body."""
     messages = body.get("messages", [])
-
-    scramble: list[str] = []
-    for m in messages:
-        content = m.get("content") or ""
-        if m["role"] == "user" and "Scramble" in content:
-            match = SCRAMBLE_RE.search(content)
-            if match:
-                scramble = match.group(1).split()
-            break
-    solution = solution_for_scramble(scramble)
+    solution = _solve_for(messages)
     has_tool_result = any(m.get("role") == "tool" for m in messages)
-    if not has_tool_result:
+    if not has_tool_result and solution:
         tool_calls = [
             {
                 "id": "call_observe",
@@ -52,7 +65,18 @@ def default_agent(body: dict[str, Any]) -> dict[str, Any]:
             },
         ]
         return {"content": None, "tool_calls": tool_calls}
-    return {"content": "The cube is solved.", "tool_calls": None}
+    if solution:
+        return {"content": "The cube is solved.", "tool_calls": None}
+    # Could not derive a solution (e.g. a direct client test with placeholder
+    # content): just observe, so the loop stays non-degenerate.
+    return {
+        "content": None,
+        "tool_calls": [{
+            "id": "call_observe",
+            "type": "function",
+            "function": {"name": "get_cube_state", "arguments": "{}"},
+        }],
+    }
 
 
 class MockApiError(Exception):

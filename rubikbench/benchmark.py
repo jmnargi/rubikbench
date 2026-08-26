@@ -236,7 +236,7 @@ def run_solve(
     ctx = SolveContext(scramble)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": initial_user_prompt(scramble, ctx.cube)},
+        {"role": "user", "content": initial_user_prompt(ctx.cube)},
     ]
     transcript: list[dict[str, Any]] = []
     started = time.monotonic()

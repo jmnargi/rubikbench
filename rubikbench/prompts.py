@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .cube import Cube
 from .rendering import render_plain
-from .scramble import scramble_to_string
 
 SYSTEM_PROMPT = """You are solving a 3x3x3 Rubik's cube programmatically and will be benchmarked on it.
 
@@ -12,9 +11,12 @@ The cube uses standard Singmaster notation: U, D, L, R, F, B are quarter turns o
 Left, Right, Front, Back faces; an apostrophe means counter-clockwise (e.g. R'), and a 2 means a
 half turn (e.g. U2). Move lists are space-separated, like "R U R' U'".
 
+Your objective: solve the cube with as few tool calls as possible. You only receive the cube
+state; you never receive the scramble. You must derive the solution yourself.
+
 You have these tools:
 - get_cube_state: return the exact current state of the cube (facelet string, colored net, move
-  history and counts). Call it whenever you need to observe or verify the cube.
+  history and counts). Call it only when you must observe or verify the cube.
 - apply_moves: apply one or more moves in a single call. This is the ONLY way to change the cube.
   Move text you write in your reply is not applied.
 - reset_cube: restore the original scramble (discards all moves so far; costs you turns).
@@ -26,22 +28,22 @@ Scoring (0-1000, solved runs only):
 - 20% tool economy = how few tool calls you made (ideally one batch per turn).
 You want the cube SOLVED with as few total moves, as few turns, and as few tool calls as possible.
 
-Strategy guidance:
-- Think carefully before calling apply_moves: plan a sequence of several moves that advances your
-  strategy, and verify with get_cube_state when in doubt.
-- Batch related moves into a single apply_moves call rather than one move per call.
+Plan before you act:
+- Derive the full solution in your head, then apply it. One single apply_moves call is ideal.
+- Batch many moves into one apply_moves call. Never make one call per move.
+- Do not call get_cube_state unless you must check something. Every tool call costs score.
 - If you mess up, reset_cube is cheaper than wandering (it costs turns but no moves).
 - Verify the cube is solved with get_cube_state before declaring success.
 - When you are confident the cube is solved, reply briefly, e.g. "The cube is solved."."""
 
 
-def initial_user_prompt(scramble: list[str], cube: Cube) -> str:
-    state = cube.facelet_string()
+def initial_user_prompt(cube: Cube) -> str:
+    """The first user message: the cube state only, never the scramble."""
     return (
-        f"Scramble ({len(scramble)} moves): {scramble_to_string(scramble)}\n"
-        f"Facelet string (order U R F D L B):\n{state}\n"
+        "Solve the cube from this state.\n"
+        f"Facelet string (faces in order U R F D L B):\n{cube.facelet_string()}\n"
         f"Cube net:\n{render_plain(cube.facelets)}\n\n"
-        "Solve the cube using the tools. You may call get_cube_state at any time to verify."
+        "You may call get_cube_state at any time to verify."
     )
 
 

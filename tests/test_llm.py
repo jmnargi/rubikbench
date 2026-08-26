@@ -19,7 +19,7 @@ from rubikbench.benchmark import (
 )
 from rubikbench.config import BenchmarkConfig
 from rubikbench.llm import AssistantTurn, LLMError, OpenAICompatibleClient
-from rubikbench.scramble import scramble_to_string, solution_for_scramble
+from rubikbench.scramble import scramble_to_string
 
 
 def make_client(url: str, **kw) -> OpenAICompatibleClient:
@@ -248,17 +248,21 @@ class TextSolverClient:
     """Solves by writing the moves as plain text (no tool calls)."""
 
     def complete(self, messages, tools, extra_body):
-        scramble = self._scramble(messages)
-        return AssistantTurn(content=scramble_to_string(solution_for_scramble(scramble)))
+        solution = self._solution(messages)
+        return AssistantTurn(content=scramble_to_string(solution))
 
     @staticmethod
-    def _scramble(messages):
+    def _solution(messages):
+        from rubikbench.solver_ref import solve_standard
+
         for m in messages:
             if m.get("role") == "user":
-                match = re.search(r"Scramble \(\d+ moves\): (.+)", m.get("content") or "")
+                match = re.search(r"Facelet string \([^)]*\):\s*([URFDLB]{54})", m.get("content") or "")
                 if match:
-                    return match.group(1).split()
-        raise AssertionError("no scramble found in messages")
+                    standard = solve_standard(match.group(1))
+                    if standard is not None:
+                        return standard
+        raise AssertionError("no cube state found in messages")
 
 
 def test_text_moves_fallback_solves(mock):
@@ -418,3 +422,26 @@ def test_runner_premade_superflip(mock):
     result = BenchmarkRunner(cfg, make_client(url)).run()
     assert result.solves[0].scramble == scramble_from_string(PREMADE_SCRAMBLES["superflip"][0])
     assert result.solves[0].solved
+
+
+def test_initial_prompt_does_not_leak_scramble():
+    from rubikbench.cube import Cube
+    from rubikbench.prompts import SYSTEM_PROMPT, initial_user_prompt
+
+    scramble = ["R", "U", "F'", "D2"]
+    cube = Cube.solved()
+    cube.apply(scramble)
+    prompt = initial_user_prompt(cube)
+    assert "Scramble" not in prompt
+    assert " ".join(scramble) not in prompt
+    assert cube.facelet_string() in prompt  # the state IS given
+    assert "as few tool calls as possible" in SYSTEM_PROMPT
+
+
+def test_loop_first_message_has_no_scramble(mock):
+    server, url = mock
+    cfg = base_cfg(max_turns=3)
+    run_solve(0, ["R", "U", "F"], cfg, make_client(url))
+    first_user = next(m for m in server.seen_bodies[0]["messages"] if m["role"] == "user")
+    assert "Scramble" not in first_user["content"]
+    assert "R U F" not in first_user["content"]
