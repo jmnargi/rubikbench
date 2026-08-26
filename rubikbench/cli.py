@@ -110,9 +110,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         cfg.validate()
     except FileNotFoundError:
         print(
-            f"error: config file not found: {path} (run the TUI first, or run without --config to use .env)",
+            f"error: config file not found: {path} (run without --config to use .env)",
             file=sys.stderr,
         )
+        print("run `rubikbench --help` for all options", file=sys.stderr)
         return 2
     except ValueError as exc:  # surface config errors
         print(f"error: invalid config: {exc}", file=sys.stderr)
@@ -144,9 +145,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     if not cfg.api_key and api_key_source(cfg.base_url):
         print(
-            f"error: no API key set; add {api_key_source(cfg.base_url)}=... (or RUBIKBENCH_API_KEY=...) to .env",
+            f"error: no API key set; add {api_key_source(cfg.base_url)}=... (or RUBIKBENCH_API_KEY=...) to .env, or pass --api-key",
             file=sys.stderr,
         )
+        print("run `rubikbench --help` for all options", file=sys.stderr)
         return 2
 
     cancel = threading.Event()

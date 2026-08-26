@@ -124,6 +124,31 @@ def test_headless_run_cli_args_override_env(mock, tmp_path, capsys, monkeypatch)
     assert server.seen_bodies[0]["max_tokens"] == 128
 
 
+def test_bare_command_runs_from_env(mock, tmp_path, capsys, monkeypatch):
+    """`rubikbench` with no subcommand starts the benchmark from .env."""
+    _, url = mock
+    monkeypatch.setenv("RUBIKBENCH_BASE_URL", url)
+    monkeypatch.setenv("RUBIKBENCH_API_KEY", "env-key")
+    monkeypatch.setenv("RUBIKBENCH_MODEL", "mock")
+    monkeypatch.setenv("RUBIKBENCH_SOLVES", "1")
+    out = tmp_path / "out.jsonl"
+    code = main(["-o", str(out), "--no-color"])
+    assert code == 0
+    stdout = capsys.readouterr().out
+    agg = json.loads(stdout[: stdout.index("results written")])
+    assert agg["solves"] == 1
+    assert agg["solve_rate"] == 1.0
+
+
+def test_bare_command_missing_key_prints_help(capsys):
+    """Missing settings print the error and a --help pointer, never a TUI."""
+    code = main(["--no-color"])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "OPENAI_API_KEY" in err
+    assert "--help" in err
+
+
 def test_headless_run_from_env_missing_key(tmp_path, capsys, monkeypatch):
     """A remote preset without any key in .env is reported clearly."""
     code = main(["run", "-o", str(tmp_path / "out.jsonl")])
