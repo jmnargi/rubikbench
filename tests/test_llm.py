@@ -1,0 +1,286 @@
+"""End-to-end tests of the client, tool loop, and runner against the mock server,
+plus fake-client tests for the text-moves fallback, turn budget, and abort paths."""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+
+import pytest
+from mock_openai import MockApiError, start_mock_server
+
+from rubikbench.benchmark import (
+    BenchmarkRunner,
+    SolveContext,
+    execute_tool,
+    export_jsonl,
+    run_solve,
+)
+from rubikbench.config import BenchmarkConfig
+from rubikbench.llm import AssistantTurn, LLMError, OpenAICompatibleClient
+from rubikbench.scramble import scramble_to_string, solution_for_scramble
+
+
+def make_client(url: str, **kw) -> OpenAICompatibleClient:
+    params = {"base_url": url, "api_key": "test-key", "model": "mock", "max_retries": 0}
+    params.update(kw)
+    return OpenAICompatibleClient(**params)
+
+
+def base_cfg(**kw) -> BenchmarkConfig:
+    params = {"model": "mock", "num_solves": 1, "max_turns": 30, "seed": 1}
+    params.update(kw)
+    return BenchmarkConfig(**params)
+
+
+@pytest.fixture()
+def mock():
+    server, url = start_mock_server()
+    yield server, url
+    server.shutdown()
+
+
+def fail_first(n: int):
+    from mock_openai import default_agent
+
+    state = {"left": n}
+
+    def agent(body):
+        if state["left"] > 0:
+            state["left"] -= 1
+            raise MockApiError(500, "boom")
+        return default_agent(body)
+
+    return agent
+
+
+# --------------------------------------------------------------------------- client
+
+def test_client_parses_tool_calls(mock):
+    server, url = mock
+    client = make_client(url, extra_body={"reasoning_effort": "high"})
+    turn = client.complete(
+        [{"role": "user", "content": "Scramble (2 moves): R U"}],
+        [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
+    )
+    assert len(turn.tool_calls) == 2
+    assert turn.tool_calls[0].name == "get_cube_state"
+    assert turn.tool_calls[1].name == "apply_moves"
+    assert turn.tool_calls[1].arguments["moves"] == "U' R'"
+    assert turn.latency >= 0
+    # extra_body is flattened into the request body by the SDK
+    assert server.seen_bodies[0]["reasoning_effort"] == "high"
+
+
+def test_client_streaming_assembles_tool_args(mock):
+    _, url = mock
+    client = make_client(url, stream=True)
+    turn = client.complete(
+        [{"role": "user", "content": "Scramble (2 moves): R U"}],
+        [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
+    )
+    assert len(turn.tool_calls) == 2
+    applied = turn.tool_calls[1]
+    assert applied.name == "apply_moves"
+    assert applied.arguments == {"moves": "U' R'"}
+    assert applied.raw == json.dumps({"moves": "U' R'"})
+    assert turn.prompt_tokens == 12
+
+
+def test_client_surfaces_http_errors():
+    server, url = start_mock_server(fail_first_n=1, status=429)
+    try:
+        client = make_client(url)
+        with pytest.raises(LLMError, match="429"):
+            client.complete([{"role": "user", "content": "hi"}], [])
+    finally:
+        server.shutdown()
+
+
+def test_client_surfaces_connection_errors():
+    client = make_client("http://127.0.0.1:1/v1", timeout=2)
+    with pytest.raises(LLMError):
+        client.complete([{"role": "user", "content": "hi"}], [])
+
+
+# --------------------------------------------------------------------------- tool execution
+
+def test_execute_tool_apply_moves_invalid_tokens():
+    ctx = SolveContext(["R", "U"])
+    result = execute_tool("apply_moves", {"moves": "R X junk2"}, ctx)
+    assert "1 move(s)" in result
+    assert "invalid" in result
+    assert ctx.total_moves == 1
+    assert ctx.cube.history == ["R"]
+
+
+def test_execute_tool_reset():
+    ctx = SolveContext(["R", "U", "F"])
+    ctx.cube.apply(["R", "U", "F"])
+    out = execute_tool("reset_cube", {}, ctx)
+    assert "original scramble" in out
+    assert ctx.cube.history == []
+    assert not ctx.cube.is_solved()
+
+
+def test_execute_tool_unknown_tool():
+    ctx = SolveContext([])
+    assert "Unknown tool" in execute_tool("frobnicate", {}, ctx)
+
+
+# --------------------------------------------------------------------------- solve loop (real HTTP)
+
+def test_solve_loop_e2e_solves_via_tools(mock):
+    _, url = mock
+    client = make_client(url)
+    scramble = ["R", "U", "F'", "D2"]
+    result = run_solve(0, scramble, base_cfg(reasoning_effort="high"), client)
+    assert result.solved
+    assert result.error is None
+    assert result.turns == 1
+    assert result.tool_calls == 2
+    assert result.total_moves == len(scramble)
+    assert result.par >= 1
+    assert result.score > 0
+    assert result.breakdown["solved"] is True
+    assert len(result.transcript) >= 3  # assistant + 2 tool results
+    assert result.scramble == scramble
+
+
+def test_solve_loop_streaming_e2e(mock):
+    _, url = mock
+    result = run_solve(0, ["R", "U"], base_cfg(stream=True), make_client(url, stream=True))
+    assert result.solved
+    assert result.turns == 1
+
+
+def test_retry_then_success(mock):
+    server, url = mock
+    server.agent = fail_first(3)
+    cfg = base_cfg(max_retries=5)
+    result = run_solve(0, ["R", "U"], cfg, make_client(url))
+    assert result.solved
+    assert result.error is None
+
+
+def test_retry_exhausted(mock):
+    server, url = mock
+    server.agent = fail_first(5)
+    result = run_solve(0, ["R", "U"], base_cfg(max_retries=1), make_client(url))
+    assert not result.solved
+    assert result.error is not None
+    assert "API error" in result.error
+
+
+def test_abort_before_first_turn(mock):
+    _, url = mock
+    cancel = threading.Event()
+    cancel.set()
+    result = run_solve(0, ["R", "U"], base_cfg(), make_client(url), cancel_event=cancel)
+    assert result.error == "aborted by user"
+    assert not result.solved
+
+
+# --------------------------------------------------------------------------- runner
+
+def test_runner_solves_three_cubes(mock):
+    _, url = mock
+    cfg = base_cfg(num_solves=3, seed=7)
+    runner = BenchmarkRunner(cfg, make_client(url))
+    result = runner.run()
+    assert len(result.solves) == 3
+    assert all(s.solved for s in result.solves)
+    agg = result.aggregates()
+    assert agg["solve_rate"] == 1.0
+    assert agg["solves"] == 3
+    assert agg["avg_moves"] > 0
+    assert result.duration >= 0
+
+
+def test_runner_cancel_stops_early(mock):
+    _, url = mock
+    cancel = threading.Event()
+    cancel.set()
+    cfg = base_cfg(num_solves=5)
+    runner = BenchmarkRunner(cfg, make_client(url))
+    result = runner.run(cancel_event=cancel)
+    assert len(result.solves) == 0
+
+
+def test_runner_custom_scrambles(mock):
+    _, url = mock
+    cfg = base_cfg(num_solves=2, scrambles=["R U", "F' B2 R"])
+    runner = BenchmarkRunner(cfg, make_client(url))
+    result = runner.run()
+    assert [s.scramble for s in result.solves] == [["R", "U"], ["F'", "B2", "R"]]
+
+
+def test_export_jsonl_roundtrip(mock, tmp_path):
+    _, url = mock
+    cfg = base_cfg(num_solves=2)
+    result = BenchmarkRunner(cfg, make_client(url)).run()
+    out = tmp_path / "results.jsonl"
+    export_jsonl(result, out)
+    lines = out.read_text().strip().splitlines()
+    assert len(lines) == 3
+    header = json.loads(lines[0])
+    assert header["event"] == "benchmark"
+    assert header["aggregates"]["solves"] == 2
+    for line in lines[1:]:
+        solve = json.loads(line)
+        assert solve["event"] == "solve"
+        assert solve["solved"] is True
+        assert "transcript" in solve
+
+
+# --------------------------------------------------------------------------- fake clients
+
+class FixedContentClient:
+    def __init__(self, content: str):
+        self.content = content
+
+    def complete(self, messages, tools, extra_body):
+        return AssistantTurn(content=self.content)
+
+
+class TextSolverClient:
+    """Solves by writing the moves as plain text (no tool calls)."""
+
+    def complete(self, messages, tools, extra_body):
+        scramble = self._scramble(messages)
+        return AssistantTurn(content=scramble_to_string(solution_for_scramble(scramble)))
+
+    @staticmethod
+    def _scramble(messages):
+        for m in messages:
+            if m.get("role") == "user":
+                match = re.search(r"Scramble \(\d+ moves\): (.+)", m.get("content") or "")
+                if match:
+                    return match.group(1).split()
+        raise AssertionError("no scramble found in messages")
+
+
+def test_text_moves_fallback_solves(mock):
+    result = run_solve(0, ["R", "U", "F'"], base_cfg(), TextSolverClient())
+    assert result.solved
+    assert result.tool_calls == 0
+    assert result.total_moves == 3
+    assert result.turns == 1
+    assert result.score > 0
+
+
+def test_text_moves_disabled_does_not_apply(mock):
+    result = run_solve(0, ["R", "U"], base_cfg(allow_text_moves=False), TextSolverClient())
+    assert not result.solved
+    assert result.total_moves == 0
+    assert result.turns >= 1
+
+
+def test_junk_turns_hit_budget():
+    cfg = base_cfg(max_turns=5)
+    result = run_solve(0, ["R", "U"], cfg, FixedContentClient("Hmm, let me think about this..."))
+    assert not result.solved
+    assert result.turns == 5
+    assert result.score == 0.0
+    assert result.error is None
