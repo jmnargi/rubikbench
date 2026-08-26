@@ -398,3 +398,23 @@ def test_max_input_tokens_trims_history(mock):
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
         assert len(messages) == 2
+
+
+def test_runner_premade_catalog_cycles(mock):
+    from rubikbench.scramble import PREMADE_SCRAMBLES, scramble_from_string
+
+    _, url = mock
+    cfg = base_cfg(num_solves=6, scramble_preset="catalog-10")
+    result = BenchmarkRunner(cfg, make_client(url)).run()
+    expected = [scramble_from_string(s) for s in PREMADE_SCRAMBLES["catalog-10"]]
+    assert [s.scramble for s in result.solves] == expected + expected[: 6 - 4]
+
+
+def test_runner_premade_superflip(mock):
+    from rubikbench.scramble import PREMADE_SCRAMBLES, scramble_from_string
+
+    _, url = mock
+    cfg = base_cfg(num_solves=1, scramble_preset="superflip")
+    result = BenchmarkRunner(cfg, make_client(url)).run()
+    assert result.solves[0].scramble == scramble_from_string(PREMADE_SCRAMBLES["superflip"][0])
+    assert result.solves[0].solved

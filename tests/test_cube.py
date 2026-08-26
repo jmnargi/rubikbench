@@ -169,3 +169,37 @@ def test_rendering():
 
     scrambled = apply_seq(["R", "U", "F"])
     assert render_plain(scrambled.facelets) != render_plain(cube.facelets)
+
+def test_premade_scrambles_are_valid():
+    from rubikbench.scramble import PREMADE_SCRAMBLES
+
+    expected = {"superflip", "cube-in-cube", "catalog-10", "catalog-16", "catalog-22", "catalog-25"}
+    assert expected <= set(PREMADE_SCRAMBLES)
+    for name, seqs in PREMADE_SCRAMBLES.items():
+        for text in seqs:
+            moves = scramble_from_string(text)
+            assert len(moves) >= 10, name
+            cube = apply_seq(moves)
+            assert not cube.is_solved(), name
+            for m in solution_for_scramble(moves):
+                cube.apply([m])
+            assert cube.is_solved(), name
+            kociemba.solve(cube.facelet_string())  # a legal state for the reference solver
+
+
+def test_superflip_is_gods_number():
+    from rubikbench.scramble import PREMADE_SCRAMBLES
+
+    moves = scramble_from_string(PREMADE_SCRAMBLES["superflip"][0])
+    cube = apply_seq(moves)
+    assert len(kociemba.solve(cube.facelet_string()).split()) == 20
+
+
+def test_assert_valid_scramble():
+    from rubikbench.scramble import assert_valid_scramble
+
+    assert_valid_scramble(["R", "U", "F'"])
+    with pytest.raises(ValueError):
+        assert_valid_scramble([])
+    with pytest.raises(ValueError):
+        assert_valid_scramble(["R", "X"])

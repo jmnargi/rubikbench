@@ -25,7 +25,12 @@ from .llm import LLMClient, LLMError
 from .prompts import SYSTEM_PROMPT, TOOLS, initial_user_prompt
 from .rendering import render_plain
 from .scoring import Weights, compute_score
-from .scramble import random_scramble, scramble_from_string, scramble_to_string
+from .scramble import (
+    assert_valid_scramble,
+    random_scramble,
+    scramble_from_string,
+    scramble_to_string,
+)
 from .solver_ref import GODS_NUMBER, par_moves
 
 #: callback(kind: str, payload: dict) used to stream progress to a UI.
@@ -420,13 +425,13 @@ class BenchmarkRunner:
         started_iso = datetime.now(timezone.utc).isoformat()
         t0 = time.monotonic()
         rng = random.Random(self.cfg.seed)
+        fixed = self._resolve_fixed_scrambles()
         solves: list[SolveResult] = []
         for i in range(self.cfg.num_solves):
             if cancel_event is not None and cancel_event.is_set():
                 break
-            if self.cfg.scrambles:
-                scratch = self.cfg.scrambles[i % len(self.cfg.scrambles)]
-                scramble = scramble_from_string(scratch)
+            if fixed is not None:
+                scramble = fixed[i % len(fixed)]
             else:
                 scramble = random_scramble(rng, self.cfg.scramble_len)
             result = run_solve(i, scramble, self.cfg, self.client, self.emitter, cancel_event)
@@ -435,6 +440,29 @@ class BenchmarkRunner:
         result = BenchmarkResult(config=self.cfg, solves=solves, started_at_iso=started_iso, duration=duration)
         _emit(self.emitter, "bench_done", result=result)
         return result
+
+    def _resolve_fixed_scrambles(self) -> list[list[str]] | None:
+        """Return the fixed scramble list (as parsed move lists), or None for random.
+
+        Resolution: a premade set name wins; ``"file"`` (or a legacy non-empty
+        ``scrambles`` list) uses the custom list. Every returned scramble is
+        parsed and verified up front so bad custom files fail before any solve.
+        """
+        if self.cfg.scramble_preset == "file" or (
+            self.cfg.scramble_preset == "" and self.cfg.scrambles
+        ):
+            parsed = [scramble_from_string(s) for s in self.cfg.scrambles]
+        elif self.cfg.scramble_preset:
+            from .scramble import PREMADE_SCRAMBLES
+
+            parsed = [
+                scramble_from_string(s) for s in PREMADE_SCRAMBLES[self.cfg.scramble_preset]
+            ]
+        else:
+            return None
+        for moves in parsed:
+            assert_valid_scramble(moves)
+        return parsed
 
 
 # --------------------------------------------------------------------------- export

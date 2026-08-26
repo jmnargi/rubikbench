@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from mock_openai import start_mock_server
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, Select
 
 from rubikbench.config import BenchmarkConfig
 from rubikbench.tui.app import RubikBenchApp
@@ -42,12 +42,17 @@ async def test_full_flow_through_tui(mock, tmp_path):
         # exercise the token cap fields through the form
         app.screen.query_one("#max_output_tokens", Input).value = "512"
         app.screen.query_one("#max_input_tokens", Input).value = "4096"
+        app.screen.query_one("#scramble_preset", Select).value = "superflip"
         await pilot.click("#start_btn")
 
         saved = json.loads(config_file.read_text())
         assert saved["model"] == "mock"
         assert saved["max_output_tokens"] == 512
         assert saved["max_input_tokens"] == 4096
+        assert saved["scramble_preset"] == "superflip"
+        from rubikbench.scramble import PREMADE_SCRAMBLES
+
+        assert app.result.solves[0].scramble == PREMADE_SCRAMBLES["superflip"][0].split()
         assert server.seen_bodies[0]["max_tokens"] == 512
 
         # results table populated

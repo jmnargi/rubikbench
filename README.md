@@ -22,6 +22,7 @@ RubikBench has a Textual TUI. The TUI has three screens:
 | Move | One face turn of the cube, for example "R" or "U'". |
 | Par | The reference number of moves to solve the scramble. |
 | Scramble | The starting mixed state of the cube. |
+| Starting scramble set | The source of the scrambles. It is random, a premade set, or a custom file. |
 | Tool call | A request from the model to execute one tool. |
 | Turn budget | The maximum number of conversation turns for one solve. |
 
@@ -58,10 +59,11 @@ Do these steps on the configuration screen:
 7. Enter the max input tokens. Leave it empty for no limit. RubikBench does not send this value to the server. It trims the older conversation turns to keep the request below this value.
 8. Enter the extra body parameters in JSON. RubikBench sends them with every chat-completion request. Use this field for model-specific values, for example "max_completion_tokens".
 9. Enter the benchmark values. The main values are:
-  - The number of solves.
-  - The turn budget.
-  - The scramble length.
-  - The seed. Leave it empty for a random seed.
+   - The number of solves.
+   - The turn budget.
+   - The starting scramble set.
+   - The scramble length.
+   - The seed. Leave it empty for a random seed.
 10. Enter the scoring weights. The default weights are moves 0.5, conversation turns 0.3, and tool calls 0.2.
 11. Select "Start benchmark".
 
@@ -82,7 +84,7 @@ You can abort the run. Use the "Abort" button.
 
 For each solve, the benchmark does these steps:
 
-1. Generate a scramble. The default length is 22 moves. The generator does not repeat the same face two times in a row.
+1. Get the scramble from the starting scramble set. The default set is random. The default length is 22 moves. The generator does not repeat the same face two times in a row.
 2. Show the scramble to the model.
 3. Ask the model for a reply. Each reply is one conversation turn.
 4. Execute the tool calls in the reply.
@@ -108,6 +110,25 @@ Some models write moves as text instead of using the tool. RubikBench can parse 
 ### Retries
 
 If a request fails, RubikBench retries it. The number of retries is a configuration value. The default is 2.
+
+### Starting scrambles
+
+Every solve starts from a solved cube. RubikBench applies a scramble to the cube.
+
+A scramble from a solved cube is always solvable. The reason: a scramble is a sequence of legal face turns. The inverse of that sequence solves the cube again.
+
+The configuration value "starting scramble set" selects the source of the scrambles. It has three modes:
+
+- Random. This is the default. RubikBench generates a new scramble for each solve. A fixed seed makes the run reproducible.
+- A premade set. RubikBench uses the scrambles in the set. The premade sets are:
+  - Superflip. It is one scramble. Every edge piece is flipped in place. This state needs 20 moves to solve.
+  - Cube in cube. It is one scramble. It makes a pattern with a small cube in each face.
+  - Catalog 10, 16, 22, and 25 moves. Each catalog has four fixed scrambles.
+- Custom scrambles file. RubikBench reads the scrambles from a text file. The file has one scramble per line.
+
+RubikBench checks each premade and custom scramble before the run. The check applies the scramble to a solved cube and replays the inverse sequence. A bad scramble stops the run with an error message.
+
+When the set has fewer scrambles than the number of solves, the run cycles through the set. For example, a run with six solves and the Catalog 16 moves set uses the first two scrambles two times each.
 
 ## 6. Scoring
 

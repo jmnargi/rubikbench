@@ -117,3 +117,18 @@ def test_max_output_tokens_merged_into_body():
     # explicit field wins over a stray extra_body entry
     cfg2 = BenchmarkConfig(max_output_tokens=1024, extra_body={"max_tokens": 99})
     assert cfg2.effective_extra_body()["max_tokens"] == 1024
+
+
+def test_scramble_preset_validation():
+    from rubikbench.config import BenchmarkConfig
+
+    with pytest.raises(ValueError, match="scramble_preset"):
+        BenchmarkConfig(scramble_preset="nope").validate()
+    with pytest.raises(ValueError, match="requires a non-empty scrambles list"):
+        BenchmarkConfig(scramble_preset="file").validate()
+    BenchmarkConfig(scramble_preset="superflip").validate()  # does not raise
+
+
+def test_legacy_scrambles_migration():
+    cfg = BenchmarkConfig.from_dict({"scrambles": ["R U F"], "base_url": "http://x/v1", "model": "m"})
+    assert cfg.scramble_preset == "file"

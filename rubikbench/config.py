@@ -54,8 +54,10 @@ class BenchmarkConfig:
     seed: int | None = None
     #: Accept moves written in plain assistant text (not via apply_moves).
     allow_text_moves: bool = True
-    #: Custom scrambles override the random generator (list of move strings).
+    #: Custom scrambles file list (used when ``scramble_preset == "file"``).
     scrambles: list[str] = field(default_factory=list)
+    #: "" = random; "file" = custom scrambles list; otherwise a premade set name.
+    scramble_preset: str = ""
 
     # --- Scoring -----------------------------------------------------------
     weight_moves: float = 0.5
@@ -94,6 +96,13 @@ class BenchmarkConfig:
             raise ValueError("max_input_tokens must be >= 1 or null")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be >= 1 or null")
+        from .scramble import PREMADE_SCRAMBLES
+
+        if self.scramble_preset not in ("", "file", *PREMADE_SCRAMBLES):
+            known = ", ".join(sorted(PREMADE_SCRAMBLES))
+            raise ValueError(f"scramble_preset must be '', 'file', or one of: {known}")
+        if self.scramble_preset == "file" and not self.scrambles:
+            raise ValueError("scramble_preset 'file' requires a non-empty scrambles list")
 
     # --- Serialization -----------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -103,6 +112,9 @@ class BenchmarkConfig:
     def from_dict(cls, data: dict[str, Any]) -> BenchmarkConfig:
         known = {f.name for f in fields(cls)}
         cleaned = {k: v for k, v in data.items() if k in known}
+        # Legacy configs used a non-empty scrambles list without a preset name.
+        if "scrambles" in data and data["scrambles"] and "scramble_preset" not in data:
+            cleaned["scramble_preset"] = "file"
         # Keep configs written by older versions/other tools working.
         if "extra_body" in cleaned and isinstance(cleaned["extra_body"], str):
             try:

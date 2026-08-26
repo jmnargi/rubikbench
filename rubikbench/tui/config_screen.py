@@ -13,6 +13,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Input, Label, Select, Switch, TextArea
 
 from ..config import PRESETS, BenchmarkConfig, load_config, save_config
+from ..scramble import premade_labels
 
 _REASONING_OPTIONS = [("Default", ""), ("low", "low"), ("medium", "medium"), ("high", "high")]
 _PAR_OPTIONS = [("auto (kociemba)", "auto"), ("God's number (20)", "god"), ("fixed value", "fixed")]
@@ -83,6 +84,10 @@ class ConfigScreen(Screen):
                     ("Number of solves", Input(str(cfg.num_solves), id="num_solves")),
                     ("Max turns per solve", Input(str(cfg.max_turns), id="max_turns")),
                     ("Scramble length", Input(str(cfg.scramble_len), id="scramble_len")),
+                    ("Starting scramble set", Select(
+                        [("Random (seeded)", "")] + premade_labels() + [("Custom scrambles file", "file")],
+                        value=cfg.scramble_preset or "", id="scramble_preset",
+                    )),
                     ("Seed (blank = random)", Input("" if cfg.seed is None else str(cfg.seed), id="seed")),
                     ("Allow text moves", Switch(value=cfg.allow_text_moves, id="text_moves_switch")),
                     ("Custom scrambles file (optional)", Input(
@@ -155,6 +160,7 @@ class ConfigScreen(Screen):
             num_solves=self._int("num_solves", 5),
             max_turns=self._int("max_turns", 40),
             scramble_len=self._int("scramble_len", 22),
+            scramble_preset=self.query_one("#scramble_preset", Select).value or "",
             seed=self._opt_int("seed"),
             allow_text_moves=self.query_one("#text_moves_switch", Switch).value,
             weight_moves=self._float("w_moves", 0.5),
@@ -239,6 +245,7 @@ class ConfigScreen(Screen):
         self._fill("num_solves", cfg.num_solves)
         self._fill("max_turns", cfg.max_turns)
         self._fill("scramble_len", cfg.scramble_len)
+        self.query_one("#scramble_preset", Select).value = cfg.scramble_preset or ""
         self._fill("seed", cfg.seed)
         self.query_one("#stream_switch", Switch).value = cfg.stream
         self.query_one("#text_moves_switch", Switch).value = cfg.allow_text_moves
