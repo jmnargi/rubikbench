@@ -21,7 +21,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Label, ProgressBar, RichLog, Static
 
 from ..benchmark import BenchmarkResult, BenchmarkRunner
-from ..config import BenchmarkConfig
+from ..config import BenchmarkConfig, api_key_from_env
 from ..llm import OpenAICompatibleClient
 from .messages import (
     BenchFinishedMsg,
@@ -141,7 +141,7 @@ class RunScreen(Screen):
         # The TUI always streams: the whole point is watching the model work.
         client = OpenAICompatibleClient(
             base_url=self.config.base_url,
-            api_key=self.config.api_key,
+            api_key=self.config.api_key or api_key_from_env(self.config.base_url)[0],
             model=self.config.model,
             timeout=self.config.timeout,
             max_retries=self.config.max_retries,

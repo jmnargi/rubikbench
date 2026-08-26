@@ -88,11 +88,17 @@ def test_headless_run_from_env_no_config(mock, tmp_path, capsys, monkeypatch):
     out = tmp_path / "out.jsonl"
     code = main(["run", "-o", str(out), "--no-color"])
     assert code == 0
-    stdout = capsys.readouterr().out
+    captured = capsys.readouterr()
+    stdout = captured.out
     agg = json.loads(stdout[: stdout.index("results written")])
     assert agg["solves"] == 2
     assert agg["solve_rate"] == 1.0
     assert out.is_file()
+    # the run reports live progress: waiting lines, tool calls, and results
+    assert "waiting for model" in captured.err
+    assert "→ get_cube_state" in captured.err
+    assert "→ apply_moves" in captured.err
+    assert "SOLVED" in captured.err
 
 
 def test_headless_run_from_env_missing_key(tmp_path, capsys, monkeypatch):

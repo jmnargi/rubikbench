@@ -299,6 +299,7 @@ def run_solve(
                 error = "aborted by user"
                 break
             attempt += 1
+            _emit(emitter, "turn_started", index=index, turn=turns + 1, attempt=attempt)
             request_messages, trimmed = trim_messages(messages, cfg.max_input_tokens)
             if trimmed:
                 _emit(emitter, "log", index=index, level="warn",

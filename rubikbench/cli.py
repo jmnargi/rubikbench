@@ -106,21 +106,59 @@ def cmd_run(args: argparse.Namespace) -> int:
         model=cfg.model,
         timeout=cfg.timeout,
         max_retries=cfg.max_retries,
-        stream=cfg.stream,
+        # Always stream: the run prints the model's text and tool calls live
+        # to stderr, so a slow model never looks hung.
+        stream=True,
         temperature=cfg.temperature,
         extra_body=cfg.effective_extra_body(),
         tool_choice=cfg.tool_choice if cfg.tool_choice != "auto" else "auto",
     )
 
+    # Tracks whether we are mid-stream so line-based messages start on a fresh
+    # line instead of gluing onto the model's text.
+    stream_state = {"active": False}
+
+    def end_stream_line() -> None:
+        if stream_state["active"]:
+            sys.stderr.write("\n")
+            stream_state["active"] = False
+
     def emit(kind: str, payload: dict) -> None:
         if kind == "solve_started":
             _print_progress_line(f"[solve {payload['index'] + 1}/{cfg.num_solves}] scramble: {payload['scramble']}", not args.no_color)
+        elif kind == "turn_started":
+            attempt = f" (retry {payload['attempt']})" if payload["attempt"] > 1 else ""
+            _print_progress_line(f"  turn {payload['turn']}: waiting for model{attempt}...", not args.no_color)
+        elif kind == "stream":
+            content = payload.get("content")
+            if content:
+                if not stream_state["active"]:
+                    sys.stderr.write("  ")
+                    stream_state["active"] = True
+                sys.stderr.write(content)
+                sys.stderr.flush()
+        elif kind == "tool_call":
+            end_stream_line()
+            _print_progress_line(
+                f"  → {payload['name']}({json.dumps(payload['arguments'], ensure_ascii=False)})", not args.no_color
+            )
+        elif kind == "tool_result":
+            first = (payload["content"].strip().splitlines() or [""])[0]
+            if len(first) > 140:
+                first = first[:140] + "…"
+            _print_progress_line(f"    {first}", not args.no_color)
+        elif kind == "turn":
+            end_stream_line()
+            what = f" · tools: {', '.join(payload['tool_call_names'])}" if payload["tool_call_names"] else ""
+            _print_progress_line(f"  turn {payload['turn']} · {payload['latency']:.1f}s{what}", not args.no_color)
         elif kind == "solve_done":
+            end_stream_line()
             s = payload["result"]
             status = "SOLVED" if s.solved else ("FAILED" if s.error else "UNSOLVED")
             extra = f"moves={s.total_moves} turns={s.turns} tools={s.tool_calls} score={s.score}"
             _print_progress_line(f"[solve {s.index + 1}/{cfg.num_solves}] {status} ({extra})", not args.no_color)
         elif kind == "log":
+            end_stream_line()
             _print_progress_line(f"  {payload['message']}", not args.no_color)
 
     runner = BenchmarkRunner(cfg, client, emitter=emit)
