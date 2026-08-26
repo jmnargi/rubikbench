@@ -47,18 +47,21 @@ class RunScreen(Screen):
     ]
 
     CSS = """
-    #run-top { height: 3; padding: 0 1; }
-    #run-status { width: 1fr; content-align: left middle; }
-    #run-progress { width: 28; margin: 0 1; }
     #run-body { height: 1fr; padding: 0 1; }
-    #left-col { width: 44; }
+    #left-col { width: 46; }
     .card { border: round $panel; padding: 0 1 1 1; margin: 0 0 1 0; }
     .card-title { text-style: bold; }
     #cube-net { width: auto; height: auto; }
     #history { height: 8; }
+    #info-grid { height: auto; grid-size: 2; grid-columns: 1fr 2fr; }
+    #info-grid Label { width: 1fr; }
+    .info-label { text-style: dim; }
     #stats-grid { height: auto; grid-size: 2; grid-columns: 1fr 1fr; }
+    #run-progress { height: 1; margin: 0 0 1 0; }
+    #run-status { height: 1; content-align: left middle; }
     #model-scroll { height: 1fr; border: round $panel; padding: 0 1; }
-    #model-text { width: 1fr; }
+    #history-text { width: 1fr; }
+    #live-text { width: 1fr; }
     """
 
     def __init__(self, config: BenchmarkConfig) -> None:
@@ -67,7 +70,7 @@ class RunScreen(Screen):
         self.cancel = threading.Event()
         self.completed = 0
 
-        # Transcript: completed entries as (kind, text) pairs. Kinds:
+        # Completed LLM-output history as (kind, text). Kinds:
         # divider / reasoning / content / tool / result / log.
         self._history: list[tuple[str, str]] = []
         self._show_reasoning = True
@@ -92,21 +95,32 @@ class RunScreen(Screen):
         self._tok_total = 0
         self._usage_turn: int | None = None
 
-        self._bench_started = time.monotonic()
         self._solve_started = time.monotonic()
         self._stats_timer = None
 
     # ------------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
-        with Horizontal(id="run-top"):
-            yield Static("", id="run-status")
-            yield ProgressBar(id="run-progress", total=self.config.num_solves, show_eta=False)
         with Horizontal(id="run-body"):
             with Vertical(id="left-col"):
                 with Vertical(classes="card"):
                     yield Label("Cube", classes="card-title")
                     yield CubeNet("", id="cube-net")
                     yield Label("Moves: —", id="history")
+                with Vertical(classes="card"):
+                    yield Label("Run", classes="card-title")
+                    with Grid(id="info-grid"):
+                        yield Label("model:", classes="info-label")
+                        yield Label(self.config.model, id="info-model")
+                        yield Label("endpoint:", classes="info-label")
+                        yield Label(self.config.base_url, id="info-endpoint")
+                        yield Label("solves:", classes="info-label")
+                        yield Label(f"{self.config.num_solves}", id="info-solves")
+                        yield Label("max turns:", classes="info-label")
+                        yield Label(f"{self.config.max_turns}", id="info-turns")
+                        yield Label("max tokens:", classes="info-label")
+                        yield Label(str(self.config.max_output_tokens or "—"), id="info-tokens")
+                        yield Label("temperature:", classes="info-label")
+                        yield Label(str(self.config.temperature if self.config.temperature is not None else "—"), id="info-temp")
                 with Vertical(classes="card"):
                     yield Label("Stats", classes="card-title")
                     with Grid(id="stats-grid"):
@@ -128,15 +142,18 @@ class RunScreen(Screen):
                         yield Label("—", id="st-speed")
                         yield Label("Score")
                         yield Label("—", id="st-score")
+                yield ProgressBar(id="run-progress", total=self.config.num_solves, show_eta=False)
+                yield Static("", id="run-status")
             # One tall pane: the whole model conversation, live.
             with VerticalScroll(id="model-scroll"):
-                yield Static("", id="model-text")
+                yield Static("", id="history-text")
+                yield Static("", id="live-text")
         yield Footer()
 
     # ------------------------------------------------------------------ worker
     def on_mount(self) -> None:
         self.run_worker(self._drive, thread=True, exclusive=True, group="bench")
-        self._stats_timer = self.set_interval(0.5, self._tick_stats)
+        self._stats_timer = self.set_interval(0.1, self._tick_stats)
 
     def on_unmount(self) -> None:
         if self._stats_timer is not None:
@@ -144,12 +161,6 @@ class RunScreen(Screen):
 
     def _drive(self) -> None:
         body = self.config.effective_extra_body()
-        self._append_log(
-            f"[cyan]Starting {self.config.num_solves} solve(s) / {self.config.max_turns} max turns "
-            f"-> {escape(self.config.model)} @ {escape(self.config.base_url)}[/cyan]"
-        )
-        if body:
-            self._append_log(f"[dim]extra body params: {body}[/dim]")
         # The TUI always streams: the whole point is watching the model work.
         client = OpenAICompatibleClient(
             base_url=self.config.base_url,
@@ -159,6 +170,7 @@ class RunScreen(Screen):
             max_retries=self.config.max_retries,
             stream=True,
             temperature=self.config.temperature,
+            max_output_tokens=self.config.max_output_tokens,
             extra_body=body,
             tool_choice=self.config.tool_choice,
         )
@@ -205,12 +217,13 @@ class RunScreen(Screen):
             self.post_message(SolveDoneMsg(payload["result"].index, self.config.num_solves, payload["result"]))
 
     # --------------------------------------------------------------- model pane
-    def _append(self, kind: str, text: str) -> None:
+    def _append_history(self, kind: str, text: str) -> None:
         self._history.append((kind, text))
-        self._update_model()
+        self._refresh_history()
+        self._scroll_model()
 
     def _append_log(self, text: str) -> None:
-        self._append("log", text)
+        self._append_history("log", text)
 
     def _render_entry(self, kind: str, text: str) -> str:
         if kind == "divider":
@@ -223,16 +236,16 @@ class RunScreen(Screen):
             return f"[dim]{escape(text)}[/dim]"
         return text  # tool / log entries already carry markup
 
-    def _render_model(self) -> str:
-        parts: list[str] = []
+    def _refresh_history(self) -> None:
+        lines = []
         for kind, text in self._history:
             rendered = self._render_entry(kind, text)
             if rendered:
-                parts.append(rendered)
-        if self._waiting_turn is not None:
-            elapsed = time.monotonic() - self._wait_started
-            retry = f" (retry {self._wait_attempt})" if self._wait_attempt > 1 else ""
-            parts.append(f"[dim]waiting for model{retry} {self._spinner_char()} {elapsed:.0f}s[/dim]")
+                lines.append(rendered)
+        self.query_one("#history-text", Static).update("\n".join(lines))
+
+    def _render_live(self) -> str:
+        parts: list[str] = []
         if self._live_reasoning and self._show_reasoning:
             parts.append(f"[grey62 italic]{escape(self._live_reasoning)}[/]")
         if self._live_content:
@@ -241,11 +254,17 @@ class RunScreen(Screen):
             slot = self._live_tool_slots[idx]
             name = slot["name"] or "…"
             args = slot["args"] or "…"
-            parts.append(f"[bright_black]→ tool {idx + 1}:[/bright_black] [bold cyan]{escape(name)}[/bold cyan]({escape(args)})")
+            parts.append(
+                f"[bright_black]→ tool {idx + 1}:[/bright_black] "
+                f"[bold cyan]{escape(name)}[/bold cyan]({escape(args)})"
+            )
         return "\n".join(parts)
 
-    def _update_model(self) -> None:
-        self.query_one("#model-text", Static).update(self._render_model())
+    def _update_live(self) -> None:
+        self.query_one("#live-text", Static).update(self._render_live())
+        self._scroll_model()
+
+    def _scroll_model(self) -> None:
         self.query_one("#model-scroll", VerticalScroll).scroll_end(animate=False)
 
     def _spinner_char(self) -> str:
@@ -264,7 +283,8 @@ class RunScreen(Screen):
 
     def action_toggle_reasoning(self) -> None:
         self._show_reasoning = not self._show_reasoning
-        self._update_model()
+        self._refresh_history()
+        self._update_live()
 
     # ---------------------------------------------------------------- handlers
     @on(SolveStartedMsg)
@@ -276,16 +296,16 @@ class RunScreen(Screen):
         self._live_tool_slots = {}
         self._waiting_turn = None
         self.query_one("#run-status", Static).update(
-            f"Solve {msg.index + 1}/{msg.total}  |  scramble: {msg.scramble}"
+            f"Solve {msg.index + 1}/{msg.total} · {msg.scramble}"
         )
-        self._append("divider", f"solve {msg.index + 1}/{msg.total} · scramble: {msg.scramble}")
+        self._append_history("divider", f"solve {msg.index + 1}/{msg.total} · {msg.scramble}")
 
     @on(TurnStartedMsg)
     def _on_turn_started(self, msg: TurnStartedMsg) -> None:
         self._waiting_turn = msg.turn
         self._wait_started = time.monotonic()
         self._wait_attempt = msg.attempt
-        self._tick_stats()  # paint the indicator right away, then every 0.5s
+        self._tick_stats()  # paint the indicator right away, then every 0.1s
 
     @on(StreamMsg)
     def _on_stream(self, msg: StreamMsg) -> None:
@@ -316,35 +336,37 @@ class RunScreen(Screen):
             self.query_one("#st-tok-in", Label).update(f"{self._tok_in:,}")
             self.query_one("#st-tok-out", Label).update(f"{self._tok_out:,}")
             self.query_one("#st-tok-cached", Label).update(f"{self._tok_cached:,}")
-        self._update_model()
+        self._update_live()
 
     @on(TurnMsg)
     def _on_turn(self, msg: TurnMsg) -> None:
         self._waiting_turn = None
-        if msg.reasoning or (msg.content and msg.content.strip()):
-            self._append("divider", f"turn {msg.turn} · {msg.latency:.1f}s")
+        has_output = bool(msg.reasoning and msg.reasoning.strip()) or bool(msg.content and msg.content.strip())
+        if has_output:
+            self._append_history("divider", f"turn {msg.turn} · {msg.latency:.1f}s")
         if msg.reasoning and msg.reasoning.strip():
-            self._append("reasoning", msg.reasoning.strip())
+            self._append_history("reasoning", msg.reasoning.strip())
         if msg.content and msg.content.strip():
-            self._append("content", msg.content.strip())
+            self._append_history("content", msg.content.strip())
         self._live_turn = None
         self._live_content = ""
         self._live_reasoning = ""
         self._live_tool_slots = {}
         self._live_ttft = None
+        self.query_one("#live-text", Static).update("")
 
     @on(ToolCallMsg)
     def _on_tool_call(self, msg: ToolCallMsg) -> None:
         args = escape(json.dumps(msg.arguments, ensure_ascii=False) if msg.arguments else "{}")
         icon = {"apply": "🔧", "reset": "↺"}.get(msg.action, "→")
-        self._append("tool", f"{icon} [bold cyan]{escape(msg.name)}[/bold cyan]({args})")
+        self._append_history("tool", f"{icon} [bold cyan]{escape(msg.name)}[/bold cyan]({args})")
 
     @on(ToolResultMsg)
     def _on_tool_result(self, msg: ToolResultMsg) -> None:
         first = (msg.content.strip().splitlines() or [""])[0]
         if len(first) > 200:
             first = first[:200] + "…"
-        self._append("result", first)
+        self._append_history("result", first)
 
     @on(StateMsg)
     def _on_state(self, msg: StateMsg) -> None:
@@ -368,7 +390,7 @@ class RunScreen(Screen):
         line += f"par={s.par} score={s.score} time={s.elapsed:.1f}s"
         if s.error:
             line += f"  [dim]({s.error})[/dim]"
-        self._append("log", line)
+        self._append_history("log", line)
         self.query_one("#st-score", Label).update(str(s.score))
         self.query_one("#run-status", Static).update(
             f"Solve {msg.index + 1}/{msg.total} {status}"
@@ -391,9 +413,9 @@ class RunScreen(Screen):
             self.query_one("#run-status", Static).update(
                 f"waiting for model{retry} {self._spinner_char()} {elapsed:.0f}s"
             )
-            self._update_model()
         elif self._live_turn is not None:
-            self._update_model()
+            # keep elapsed counter fresh while streaming
+            pass
         elapsed = time.monotonic() - self._solve_started
         self.query_one("#st-time", Label).update(f"{elapsed:.1f}s")
         if self._tok_out > 0 and elapsed > 0:

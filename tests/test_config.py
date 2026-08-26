@@ -117,13 +117,15 @@ def test_token_cap_validation(field, value):
         cfg.validate()
 
 
-def test_max_output_tokens_merged_into_body():
+def test_max_output_tokens_not_in_extra_body():
+    # max_output_tokens is a standard top-level OpenAI parameter; it must not
+    # be smuggled inside extra_body.
     cfg = BenchmarkConfig(max_output_tokens=2048, extra_body={"temperature": 0.4})
-    body = cfg.effective_extra_body()
-    assert body["max_tokens"] == 2048
-    # explicit field wins over a stray extra_body entry
+    assert "max_tokens" not in cfg.effective_extra_body()
+    # a stray extra_body entry is preserved for power users, but the explicit
+    # config field is no longer merged here.
     cfg2 = BenchmarkConfig(max_output_tokens=1024, extra_body={"max_tokens": 99})
-    assert cfg2.effective_extra_body()["max_tokens"] == 1024
+    assert cfg2.effective_extra_body()["max_tokens"] == 99
 
 
 def test_scramble_preset_validation():

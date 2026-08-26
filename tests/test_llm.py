@@ -443,8 +443,10 @@ class RecordingClient:
 def test_max_output_tokens_sent_in_body(mock):
     server, url = mock
     cfg = base_cfg(max_output_tokens=512, max_input_tokens=None)
-    run_solve(0, ["R", "U"], cfg, make_client(url))
+    client = make_client(url, max_output_tokens=cfg.max_output_tokens)
+    run_solve(0, ["R", "U"], cfg, client)
     assert server.seen_bodies[0]["max_tokens"] == 512
+    assert "max_tokens" not in (client._extra_body or {})  # passed top-level, not in extra_body
 
 
 def test_max_input_tokens_trims_history(mock):

@@ -48,7 +48,7 @@ class BenchmarkConfig:
     #: Optional prompt-cache retention request, merged as ``prompt_cache_retention``
     #: (seconds). Cached-token usage is always recorded when the server reports it.
     cache_retention: int | None = None
-    #: Output token cap forwarded as ``max_tokens`` in the request body.
+    #: Output token cap forwarded as the standard ``max_tokens`` parameter.
     max_output_tokens: int | None = None
     #: Approximate cap on the request context (tokens). Older conversation turns
     #: are trimmed to stay below this value; ``None`` disables trimming.
@@ -136,14 +136,18 @@ class BenchmarkConfig:
         return cfg
 
     def effective_extra_body(self) -> dict[str, Any]:
-        """``extra_body`` plus the explicit reasoning effort and token cap fields."""
+        """``extra_body`` plus explicit reasoning/cache knobs.
+
+        ``max_output_tokens`` is intentionally omitted: for OpenAI-compatible
+        endpoints it is a standard top-level ``max_tokens`` parameter, passed
+        directly to ``chat.completions.create`` rather than buried in
+        ``extra_body``.
+        """
         body = dict(self.extra_body or {})
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
         if self.cache_retention:
             body["prompt_cache_retention"] = self.cache_retention
-        if self.max_output_tokens:
-            body["max_tokens"] = self.max_output_tokens
         return body
 
 

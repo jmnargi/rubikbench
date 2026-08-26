@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from rich.text import Text
 
-# Face letter -> (rich color for the sticker background, dark text color)
+# Face letter -> vivid hex background color for each sticker.
+# These render as solid colored blocks even on dark / 256-color terminals.
 FACE_COLORS = {
-    "U": ("white", "black"),
-    "R": ("red", "white"),
-    "F": ("green", "black"),
-    "D": ("yellow", "black"),
-    "L": ("orange1", "black"),
-    "B": ("blue", "white"),
+    "U": "#FFFFFF",  # white
+    "R": "#FF3333",  # red
+    "F": "#00E000",  # green
+    "D": "#FFFF33",  # yellow
+    "L": "#FF8800",  # orange
+    "B": "#3366FF",  # blue
 }
 
 _INDENT = "        "  # 8 spaces: aligns U/D under the F column of the 4-wide row
@@ -64,8 +65,10 @@ def _row_colored(facelets: list[str], faces: str, row: int) -> Text:
         group = Text()
         for col in range(3):
             letter = facelets[FACES_ORDER.index(face) * 9 + row * 3 + col]
-            bg, fg = FACE_COLORS[letter]
-            group.append("██", style=f"bold {fg} on {bg}")
+            bg = FACE_COLORS[letter]
+            # Two spaces painted with the sticker color as the cell background.
+            # This avoids dark foreground colors making the block look black.
+            group.append("  ", style=f"on {bg}")
         blocks.append(group)
     sep = Text("  ")
     out = blocks[0].copy()

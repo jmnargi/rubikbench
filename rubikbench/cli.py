@@ -162,6 +162,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # to stderr, so a slow model never looks hung.
         stream=True,
         temperature=cfg.temperature,
+        max_output_tokens=cfg.max_output_tokens,
         extra_body=cfg.effective_extra_body(),
         tool_choice=cfg.tool_choice if cfg.tool_choice != "auto" else "auto",
     )

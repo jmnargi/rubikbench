@@ -109,10 +109,13 @@ async def test_results_screen_for_empty_run(mock):
 
 
 def _model_text(app) -> str:
-    """Plain text of the run screen's merged model pane."""
+    """Plain text of the run screen's right-hand model pane."""
     from textual.widgets import Static
 
-    return str(app.screen.query_one("#model-text", Static).render())
+    screen = app.screen
+    history = str(screen.query_one("#history-text", Static).render())
+    live = str(screen.query_one("#live-text", Static).render())
+    return f"{history}\n{live}"
 
 
 async def test_run_screen_streams_live_output(mock, tmp_path):
@@ -135,30 +138,37 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         def _drive(self) -> None:
             pass
 
-    cfg = BenchmarkConfig(base_url="http://x/v1", model="mock", num_solves=1)
+    cfg = BenchmarkConfig(base_url="http://x/v1", model="mock", num_solves=1, max_output_tokens=512)
     app = RubikBenchApp(config_path=tmp_path / "cfg.json", auto_run=False)
     app.config = cfg
     async with app.run_test(size=(120, 40)) as pilot:
         app.push_screen(IdleRunScreen(cfg))
         await pilot.pause()
         screen = app.screen
-        assert screen.query_one("#model-text", Static) is not None
+        assert screen.query_one("#history-text", Static) is not None
+        assert screen.query_one("#live-text", Static) is not None
         assert screen.query_one("#model-scroll") is not None
 
-        # a sent request shows a live waiting indicator before any chunks
+        # config info lives in the left panel, not the model pane
+        assert "vitruvix" in str(screen.query_one("#info-model", Label).render()) or "mock" in str(
+            screen.query_one("#info-model", Label).render()
+        )
+        assert "512" in str(screen.query_one("#info-tokens", Label).render())
+
+        # a sent request shows a live waiting indicator only at the bottom left
         screen.post_message(TurnStartedMsg(1))
         await pilot.pause()
         assert "waiting for model" in str(screen.query_one("#run-status", Static).render())
-        assert "waiting for model" in _model_text(app)
+        assert "waiting for model" not in _model_text(app)
 
         # the cube pane renders colored stickers from a state event
         screen.post_message(StateMsg(list(Cube.solved().facelets), [], 0, 1, 1, False))
         await pilot.pause()
         cube_text = screen.query_one("#cube-net").render()
         styles = {str(span.style) for span in cube_text.spans}
-        assert any("ansi_red" in s for s in styles)
-        assert any("ansi_blue" in s for s in styles)
-        assert any("ansi_green" in s for s in styles)
+        assert "on rgb(255,51,51)" in styles   # R face
+        assert "on rgb(51,102,255)" in styles  # B face
+        assert "on rgb(0,224,0)" in styles      # F face
 
         # reasoning content streams in, rendered grey, and Ctrl+T collapses it
         screen.post_message(StreamMsg(1, None, None, None, None, None, "Let me think about the state..."))

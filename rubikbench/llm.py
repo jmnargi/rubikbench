@@ -73,6 +73,7 @@ class OpenAICompatibleClient:
         max_retries: int = 0,
         stream: bool = False,
         temperature: float | None = None,
+        max_output_tokens: int | None = None,
         extra_body: dict[str, Any] | None = None,
         tool_choice: str = "auto",
     ) -> None:
@@ -82,6 +83,7 @@ class OpenAICompatibleClient:
         self._model = model
         self._stream = stream
         self._temperature = temperature
+        self._max_output_tokens = max_output_tokens
         self._extra_body = dict(extra_body or {})
         self._tool_choice = tool_choice
         # The SDK must not retry internally: retries with backoff are owned by
@@ -111,6 +113,10 @@ class OpenAICompatibleClient:
             kwargs["tool_choice"] = self._tool_choice
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
+        if self._max_output_tokens:
+            # Standard OpenAI-compatible parameter; LiteLLM proxies and vLLM
+            # accept ``max_tokens`` at the top level (not inside extra_body).
+            kwargs["max_tokens"] = self._max_output_tokens
         if self._stream:
             # Ask the server to include usage in the stream so live token counts
             # can be shown; supported by OpenAI-compatible servers (LiteLLM
