@@ -142,7 +142,7 @@ def cmd_presets() -> int:
     for name, p in PRESETS.items():
         env = f" (api key from ${p['env']})" if p.get("env") else " (no key needed)"
         print(f"{name:20} {p['base_url']:<40} model: {p['model'] or '<set in TUI>'}{env}")
-    print("\nTip: put OPENROUTER_API_KEY=... (or RUBIKBENCH_API_KEY=...) in .env and run `rubikbench run` without a config file.")
+    print("\nTip: put your provider key (OPENAI_API_KEY, OPENROUTER_API_KEY, ...) or RUBIKBENCH_API_KEY in .env and run `rubikbench run` without a config file.")
     return 0
 
 def cmd_aggregate(args: argparse.Namespace) -> int:
@@ -197,7 +197,13 @@ def cmd_validate(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - surface config errors
         print(f"invalid: {exc}", file=sys.stderr)
         return 1
-    key_state = "set (from environment)" if cfg.api_key else "not set (local server, or add OPENROUTER_API_KEY to .env)"
+    preset_env = preset_env_for(cfg.base_url)
+    if cfg.api_key:
+        key_state = "set (from environment)"
+    elif preset_env:
+        key_state = f"not set (add {preset_env}=... or RUBIKBENCH_API_KEY=... to .env)"
+    else:
+        key_state = "not set (local server needs no key)"
     print(
         f"config OK: {cfg.model} @ {cfg.base_url} "
         f"({cfg.num_solves} solves, {cfg.max_turns} max turns); api key: {key_state}"

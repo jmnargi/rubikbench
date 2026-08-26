@@ -181,10 +181,11 @@ For a quick headless run you can skip the TUI and the config file entirely.
 RubikBench loads a `.env` file from the project directory at startup, so
 credentials never have to live in a config file (`.env` is gitignored).
 
-Create `.env` with at least an API key:
+Create `.env` with your endpoint and key:
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...
+OPENAI_API_KEY=sk-...
+RUBIKBENCH_MODEL=gpt-4o
 ```
 
 Then run:
@@ -193,16 +194,21 @@ Then run:
 uv run rubikbench run
 ```
 
-With no config file present, RubikBench defaults to the OpenRouter endpoint
-and a current free model with tool-calling support
-(`google/gemma-4-31b-it:free`). Optional `.env` variables:
+With no config file present, RubikBench defaults to the OpenAI endpoint and
+model; everything else is optional. All supported `.env` variables:
 
 | Variable | Meaning |
 |---|---|
+| `OPENAI_API_KEY` | OpenAI key; used automatically when the endpoint is OpenAI. |
 | `OPENROUTER_API_KEY` | OpenRouter key; used automatically when the endpoint is OpenRouter. |
 | `RUBIKBENCH_API_KEY` | Generic API key override for any endpoint. |
-| `RUBIKBENCH_BASE_URL` | Override the endpoint URL. |
-| `RUBIKBENCH_MODEL` | Override the model, e.g. another `:free` model. |
+| `RUBIKBENCH_BASE_URL` | Endpoint URL (any OpenAI-compatible /v1 server). |
+| `RUBIKBENCH_MODEL` | Model name. |
+| `RUBIKBENCH_MAX_INPUT_TOKENS` | Context cap; older turns are trimmed to fit. |
+| `RUBIKBENCH_MAX_OUTPUT_TOKENS` | Sent as `max_tokens` in the request. |
+| `RUBIKBENCH_TEMPERATURE` | Sampling temperature (blank = model default). |
+| `RUBIKBENCH_TIMEOUT` | Request timeout in seconds. |
+| `RUBIKBENCH_MAX_RETRIES` | Retries per request. |
 | `RUBIKBENCH_SOLVES` | Number of solves. |
 | `RUBIKBENCH_MAX_TURNS` | Turn budget per solve. |
 | `RUBIKBENCH_SCRAMBLE_LEN` | Scramble length. |

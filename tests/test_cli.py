@@ -29,6 +29,12 @@ def _clean_rubikbench_env(monkeypatch):
         "RUBIKBENCH_MAX_TURNS",
         "RUBIKBENCH_SCRAMBLE_LEN",
         "RUBIKBENCH_SEED",
+        "RUBIKBENCH_MAX_INPUT_TOKENS",
+        "RUBIKBENCH_MAX_OUTPUT_TOKENS",
+        "RUBIKBENCH_TEMPERATURE",
+        "RUBIKBENCH_TIMEOUT",
+        "RUBIKBENCH_MAX_RETRIES",
+        "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -89,7 +95,7 @@ def test_headless_run_from_env_missing_key(tmp_path, capsys, monkeypatch):
     code = main(["run", "-o", str(tmp_path / "out.jsonl")])
     assert code == 2
     err = capsys.readouterr().err
-    assert "OPENROUTER_API_KEY" in err
+    assert "OPENAI_API_KEY" in err
 
 
 def test_headless_validate(mock, tmp_path, capsys):

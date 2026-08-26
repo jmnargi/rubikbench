@@ -221,10 +221,15 @@ def preset_env_for(base_url: str) -> str | None:
 
 #: ``RUBIKBENCH_*`` variables mapped to config fields and their parsers.
 _ENV_KNOBS: dict[str, tuple[str, Any]] = {
+    "RUBIKBENCH_MAX_INPUT_TOKENS": ("max_input_tokens", int),
+    "RUBIKBENCH_MAX_OUTPUT_TOKENS": ("max_output_tokens", int),
     "RUBIKBENCH_SOLVES": ("num_solves", int),
     "RUBIKBENCH_MAX_TURNS": ("max_turns", int),
     "RUBIKBENCH_SCRAMBLE_LEN": ("scramble_len", int),
     "RUBIKBENCH_SEED": ("seed", int),
+    "RUBIKBENCH_MAX_RETRIES": ("max_retries", int),
+    "RUBIKBENCH_TIMEOUT": ("timeout", float),
+    "RUBIKBENCH_TEMPERATURE": ("temperature", float),
 }
 
 
@@ -254,17 +259,20 @@ def apply_env_overrides(cfg: BenchmarkConfig) -> BenchmarkConfig:
         try:
             overrides[field_name] = cast(raw)
         except ValueError as exc:
-            raise ValueError(f"{env_name} must be an integer, got {raw!r}") from exc
+            raise ValueError(f"{env_name} must be a number, got {raw!r}") from exc
     return replace(cfg, **overrides)
 
 
 def config_from_env() -> BenchmarkConfig:
     """Build a full config from the environment, with no config file needed.
 
-    Defaults to the OpenRouter endpoint and a current free model, so a headless
-    run only needs an API key in ``.env`` (e.g. ``OPENROUTER_API_KEY=...``).
-    Raises ValueError on malformed ``RUBIKBENCH_*`` values.
+    Defaults to the OpenAI endpoint and model (the project default); override
+    the endpoint, model, key, and any knob via ``RUBIKBENCH_*`` variables in
+    ``.env`` (e.g. ``RUBIKBENCH_BASE_URL=...``, ``RUBIKBENCH_MODEL=...``,
+    ``OPENAI_API_KEY=...`` or ``RUBIKBENCH_API_KEY=...``). Raises ValueError
+    on malformed ``RUBIKBENCH_*`` values.
     """
-    base_url = os.environ.get("RUBIKBENCH_BASE_URL") or PRESETS["OpenRouter"]["base_url"]
-    model = os.environ.get("RUBIKBENCH_MODEL") or OPENROUTER_FREE_MODEL
+    openai = PRESETS["OpenAI"]
+    base_url = os.environ.get("RUBIKBENCH_BASE_URL") or openai["base_url"]
+    model = os.environ.get("RUBIKBENCH_MODEL") or openai["model"]
     return apply_env_overrides(BenchmarkConfig(base_url=base_url, model=model))

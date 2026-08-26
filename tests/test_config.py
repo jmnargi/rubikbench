@@ -8,7 +8,6 @@ import pytest
 
 from rubikbench.config import (
     DEFAULT_CONFIG_PATH,
-    OPENROUTER_FREE_MODEL,
     PRESETS,
     BenchmarkConfig,
     apply_env_overrides,
@@ -182,13 +181,13 @@ def test_load_env_does_not_override_existing(tmp_path, monkeypatch):
     assert os.environ["PLAIN"] == "already-set"
 
 
-def test_config_from_env_defaults_to_openrouter_free(monkeypatch):
+def test_config_from_env_defaults_to_openai(monkeypatch):
     monkeypatch.delenv("RUBIKBENCH_BASE_URL", raising=False)
     monkeypatch.delenv("RUBIKBENCH_MODEL", raising=False)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     cfg = config_from_env()
-    assert cfg.base_url == PRESETS["OpenRouter"]["base_url"]
-    assert cfg.model == OPENROUTER_FREE_MODEL
+    assert cfg.base_url == PRESETS["OpenAI"]["base_url"]
+    assert cfg.model == PRESETS["OpenAI"]["model"]
     assert cfg.api_key == "sk-test"
 
 
@@ -199,10 +198,28 @@ def test_config_from_env_overrides(monkeypatch):
     monkeypatch.setenv("RUBIKBENCH_SOLVES", "3")
     monkeypatch.setenv("RUBIKBENCH_MAX_TURNS", "10")
     monkeypatch.setenv("RUBIKBENCH_SEED", "7")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     cfg = config_from_env()
     assert (cfg.base_url, cfg.model, cfg.api_key) == ("http://mock/v1", "mock-model", "k")
     assert (cfg.num_solves, cfg.max_turns, cfg.seed) == (3, 10, 7)
+
+
+def test_config_from_env_token_and_numeric_knobs(monkeypatch):
+    monkeypatch.setenv("RUBIKBENCH_BASE_URL", "http://mock/v1")
+    monkeypatch.setenv("RUBIKBENCH_API_KEY", "k")
+    monkeypatch.setenv("RUBIKBENCH_MODEL", "mock-model")
+    monkeypatch.setenv("RUBIKBENCH_MAX_INPUT_TOKENS", "32768")
+    monkeypatch.setenv("RUBIKBENCH_MAX_OUTPUT_TOKENS", "4096")
+    monkeypatch.setenv("RUBIKBENCH_TEMPERATURE", "0.2")
+    monkeypatch.setenv("RUBIKBENCH_TIMEOUT", "60.5")
+    monkeypatch.setenv("RUBIKBENCH_MAX_RETRIES", "3")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = config_from_env()
+    assert cfg.max_input_tokens == 32768
+    assert cfg.max_output_tokens == 4096
+    assert cfg.temperature == 0.2
+    assert cfg.timeout == 60.5
+    assert cfg.max_retries == 3
 
 
 def test_config_from_env_bad_knob(monkeypatch):
