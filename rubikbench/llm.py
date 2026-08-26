@@ -182,9 +182,14 @@ class OpenAICompatibleClient:
                 if content:
                     content_parts.append(content)
                     delta_content = content
-                # Reasoning models (DeepSeek, some OpenRouter models) emit the
-                # chain of thought in reasoning_content / reasoning.
-                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                # Reasoning models (DeepSeek, OpenRouter, Gemini via proxies)
+                # emit the chain of thought under various field names.
+                reasoning = None
+                for attr in ("reasoning_content", "reasoning", "thinking"):
+                    value = getattr(delta, attr, None)
+                    if value:
+                        reasoning = value
+                        break
                 if reasoning:
                     reasoning_parts.append(reasoning)
                     delta_reasoning = reasoning
@@ -259,7 +264,11 @@ class OpenAICompatibleClient:
         content = getattr(message, "content", None) if message is not None else None
         reasoning = None
         if message is not None:
-            reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+            for attr in ("reasoning_content", "reasoning", "thinking"):
+                value = getattr(message, attr, None)
+                if value:
+                    reasoning = value
+                    break
         finish_reason = getattr(choice, "finish_reason", None) if choice is not None else None
         tool_calls: list[ToolCall] = []
         for tc in getattr(message, "tool_calls", None) or []:

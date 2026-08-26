@@ -43,6 +43,15 @@ class LogMsg(Message):
         self.level = level
 
 
+class TurnStartedMsg(Message):
+    """A chat request was sent; the model has not replied yet."""
+
+    def __init__(self, turn: int, attempt: int = 1) -> None:
+        super().__init__()
+        self.turn = turn
+        self.attempt = attempt
+
+
 class TurnMsg(Message):
     def __init__(
         self,

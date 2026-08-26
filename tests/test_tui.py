@@ -120,7 +120,12 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
     """Streaming chunks paint into the live panel, token counters, and history."""
     from textual.widgets import Label, Static
 
-    from rubikbench.tui.messages import StreamMsg, ToolCallMsg, ToolResultMsg
+    from rubikbench.tui.messages import (
+        StreamMsg,
+        ToolCallMsg,
+        ToolResultMsg,
+        TurnStartedMsg,
+    )
     from rubikbench.tui.run_screen import RunScreen
 
     class IdleRunScreen(RunScreen):
@@ -138,6 +143,12 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         screen = app.screen
         assert screen.query_one("#live", Static) is not None
         assert screen.query_one("#log") is not None
+
+        # a sent request shows a live waiting indicator before any chunks
+        screen.post_message(TurnStartedMsg(1))
+        await pilot.pause()
+        assert "waiting for model" in str(screen.query_one("#run-status", Static).render())
+        assert "waiting for model" in str(screen.query_one("#live", Static).render())
 
         # reasoning content streams in and renders in the live panel
         screen.post_message(StreamMsg(1, None, None, None, None, None, "Let me think about the state..."))

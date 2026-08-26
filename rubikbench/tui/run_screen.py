@@ -33,6 +33,7 @@ from .messages import (
     ToolCallMsg,
     ToolResultMsg,
     TurnMsg,
+    TurnStartedMsg,
 )
 from .widgets import CubeNet
 
@@ -70,6 +71,11 @@ class RunScreen(Screen):
         self._live_tool_slots: dict[int, dict[str, str]] = {}
         self._live_ttft: float | None = None
         self._live_started = 0.0
+        # Request-in-flight state (shown while waiting for the first chunk).
+        self._waiting_turn: int | None = None
+        self._wait_started = 0.0
+        self._wait_attempt = 1
+        self._spinner = 0
 
         # Run-wide counters (from stream usage + turn results).
         self._tok_in = 0
@@ -166,6 +172,8 @@ class RunScreen(Screen):
     def _on_engine_event(self, kind: str, payload: dict) -> None:
         if kind == "solve_started":
             self.post_message(SolveStartedMsg(payload["index"], self.config.num_solves, payload["scramble"]))
+        elif kind == "turn_started":
+            self.post_message(TurnStartedMsg(payload["turn"], payload.get("attempt", 1)))
         elif kind == "stream":
             p = payload
             self.post_message(StreamMsg(
@@ -191,6 +199,7 @@ class RunScreen(Screen):
 
     # ------------------------------------------------------------- live stream
     def _start_live_turn(self, turn: int) -> None:
+        self._waiting_turn = None  # first chunk arrived; we are streaming now
         self._live_turn = turn
         self._live_content = ""
         self._live_reasoning = ""
@@ -198,6 +207,26 @@ class RunScreen(Screen):
         self._live_ttft = None
         self._live_started = time.monotonic()
         self.query_one("#run-status", Static).update(f"Turn {turn} — streaming…")
+
+    def _spinner_char(self) -> str:
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        char = frames[self._spinner % len(frames)]
+        self._spinner += 1
+        return char
+
+    def _update_waiting(self) -> None:
+        """Live 'waiting for the model' indicator with elapsed time."""
+        if self._waiting_turn is None:
+            return
+        elapsed = time.monotonic() - self._wait_started
+        retry = f" (retry {self._wait_attempt})" if self._wait_attempt > 1 else ""
+        self.query_one("#run-status", Static).update(
+            f"turn {self._waiting_turn} — waiting for model{retry} {self._spinner_char()} {elapsed:.0f}s"
+        )
+        self.query_one("#live", Static).update(
+            f"[bold cyan]turn {self._waiting_turn}[/bold cyan] — waiting for model{retry}…\n"
+            f"[dim]{elapsed:.0f}s since the request was sent[/dim]"
+        )
 
     def _render_live(self) -> str:
         parts = [f"[bold cyan]turn {self._live_turn}[/bold cyan]"]
@@ -256,7 +285,9 @@ class RunScreen(Screen):
         self._solve_started = time.monotonic()
         self._live_turn = None
         self._live_content = ""
+        self._live_reasoning = ""
         self._live_tool_slots = {}
+        self._waiting_turn = None
         self.query_one("#run-status", Static).update(
             f"Solve {msg.index + 1}/{msg.total}  |  scramble: {msg.scramble}"
         )
@@ -265,8 +296,16 @@ class RunScreen(Screen):
         log.write(f"[dim]scramble: {msg.scramble}[/dim]")
         self.query_one("#live", Static).update(f"Solving… (scramble: {escape(msg.scramble)})")
 
+    @on(TurnStartedMsg)
+    def _on_turn_started(self, msg: TurnStartedMsg) -> None:
+        self._waiting_turn = msg.turn
+        self._wait_started = time.monotonic()
+        self._wait_attempt = msg.attempt
+        self._update_waiting()
+
     @on(TurnMsg)
     def _on_turn(self, msg: TurnMsg) -> None:
+        self._waiting_turn = None
         log = self.query_one("#log", RichLog)
         line = f"[yellow]turn {msg.turn}[/yellow] · {msg.latency:.1f}s"
         if msg.tool_call_names:
@@ -341,6 +380,8 @@ class RunScreen(Screen):
         """Periodic refresh of elapsed time and token rate (UI thread)."""
         if self._live_turn is not None:
             self._update_live()
+        elif self._waiting_turn is not None:
+            self._update_waiting()
         elapsed = time.monotonic() - self._solve_started
         self.query_one("#st-time", Label).update(f"{elapsed:.1f}s")
         if self._tok_out > 0 and elapsed > 0:
