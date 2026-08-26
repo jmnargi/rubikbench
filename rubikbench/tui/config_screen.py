@@ -61,6 +61,14 @@ class ConfigScreen(Screen):
                         "" if cfg.temperature is None else str(cfg.temperature), id="temperature", placeholder="e.g. 0.2")),
                     ("Request timeout (s)", Input(str(cfg.timeout), id="timeout")),
                     ("Retries per request", Input(str(cfg.max_retries), id="max_retries")),
+                    ("Max output tokens (blank = model default)", Input(
+                        "" if cfg.max_output_tokens is None else str(cfg.max_output_tokens),
+                        id="max_output_tokens", placeholder="e.g. 4096",
+                    )),
+                    ("Max input tokens, context cap (blank = unlimited)", Input(
+                        "" if cfg.max_input_tokens is None else str(cfg.max_input_tokens),
+                        id="max_input_tokens", placeholder="e.g. 32768",
+                    )),
                     ("Tool choice", Select(_TOOL_CHOICE_OPTIONS, value=cfg.tool_choice, id="tool_choice")),
                     ("Stream responses", Switch(value=cfg.stream, id="stream_switch")),
                     ("Extra body params (JSON)", TextArea(json.dumps(cfg.extra_body or {}, indent=1), id="extra_body", language="json")),
@@ -140,6 +148,8 @@ class ConfigScreen(Screen):
             temperature=self._opt_float("temperature"),
             timeout=self._float("timeout", 120.0),
             max_retries=self._int("max_retries", 2),
+            max_output_tokens=self._opt_int("max_output_tokens"),
+            max_input_tokens=self._opt_int("max_input_tokens"),
             stream=self.query_one("#stream_switch", Switch).value,
             tool_choice=self.query_one("#tool_choice", Select).value or "auto",
             num_solves=self._int("num_solves", 5),
@@ -224,6 +234,8 @@ class ConfigScreen(Screen):
         self._fill("temperature", cfg.temperature)
         self._fill("timeout", cfg.timeout)
         self._fill("max_retries", cfg.max_retries)
+        self._fill("max_output_tokens", cfg.max_output_tokens)
+        self._fill("max_input_tokens", cfg.max_input_tokens)
         self._fill("num_solves", cfg.num_solves)
         self._fill("max_turns", cfg.max_turns)
         self._fill("scramble_len", cfg.scramble_len)

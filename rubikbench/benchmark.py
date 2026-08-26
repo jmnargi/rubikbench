@@ -9,6 +9,7 @@ requested. Wall-clock time and token usage are recorded per turn.
 from __future__ import annotations
 
 import json
+import math
 import random
 import threading
 import time
@@ -151,6 +152,71 @@ class BenchmarkResult:
             "total_completion_tokens": sum(s.completion_tokens for s in self.solves),
         }
 
+# --------------------------------------------------------------------------- context trimming
+
+def estimate_tokens(text: str | None) -> int:
+    """Rough token estimate: about 4 characters per token (common heuristic)."""
+    return max(1, math.ceil(len(text or "") / 4))
+
+
+def estimate_message_tokens(message: dict[str, Any]) -> int:
+    """Estimated tokens for one message, including a small role/name overhead."""
+    total = 6
+    content = message.get("content")
+    if content:
+        total += estimate_tokens(content)
+    for tc in message.get("tool_calls") or []:
+        fn = tc.get("function") or {}
+        total += estimate_tokens(fn.get("arguments") or "") + 8
+    return total
+
+
+def trim_messages(
+    messages: list[dict[str, Any]], max_input_tokens: int | None
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return a copy of `messages` that fits roughly within `max_input_tokens`.
+
+    The system message and the initial user message (indexes 0 and 1) are never
+    removed: the initial user message carries the scramble and the initial cube
+    state. Older conversation turns are dropped as complete units (an assistant
+    message together with any tool results that follow it), oldest first.
+
+    Returns ``(request_messages, trimmed)`` where ``trimmed`` is True when at
+    least one turn was removed. A ``None`` cap disables trimming.
+    """
+    if not max_input_tokens:
+        return list(messages), False
+    if sum(estimate_message_tokens(m) for m in messages) <= max_input_tokens:
+        return list(messages), False
+
+    kept = list(messages[:2])  # system + initial user survive trimming
+    units: list[list[dict[str, Any]]] = []
+    i = 2
+    while i < len(messages):
+        unit = [messages[i]]
+        if messages[i].get("role") == "assistant":
+            i += 1
+            while i < len(messages) and messages[i].get("role") == "tool":
+                unit.append(messages[i])
+                i += 1
+        else:
+            i += 1
+        units.append(unit)
+
+    dropped = False
+    while units:
+        tokens = sum(estimate_message_tokens(m) for m in kept) + sum(
+            estimate_message_tokens(m) for u in units for m in u
+        )
+        if tokens <= max_input_tokens:
+            break
+        units.pop(0)
+        dropped = True
+    for unit in units:
+        kept.extend(unit)
+    return kept, dropped
+
+
 
 # --------------------------------------------------------------------------- solve loop
 
@@ -192,8 +258,12 @@ def run_solve(
                 error = "aborted by user"
                 break
             attempt += 1
+            request_messages, trimmed = trim_messages(messages, cfg.max_input_tokens)
+            if trimmed:
+                _emit(emitter, "log", index=index, level="warn",
+                      message=f"Turn {turns + 1}: trimmed conversation history to fit max input tokens ({cfg.max_input_tokens}).")
             try:
-                turn = client.complete(messages, TOOLS, cfg.effective_extra_body())
+                turn = client.complete(request_messages, TOOLS, cfg.effective_extra_body())
                 break
             except LLMError as exc:
                 _emit(emitter, "log", index=index, level="error",

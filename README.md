@@ -17,6 +17,8 @@ RubikBench has a Textual TUI. The TUI has three screens:
 | Conversation turn | One model reply in the benchmark loop. |
 | Endpoint | A server URL that accepts chat-completion requests. |
 | Extra body parameters | JSON values sent with every chat-completion request. |
+| Max input tokens | The maximum number of tokens in one request. RubikBench trims the older conversation turns to keep the request below this value. |
+| Max output tokens | The maximum number of tokens in one model reply. RubikBench sends this value as "max_tokens" in the request body. |
 | Move | One face turn of the cube, for example "R" or "U'". |
 | Par | The reference number of moves to solve the scramble. |
 | Scramble | The starting mixed state of the cube. |
@@ -52,14 +54,16 @@ Do these steps on the configuration screen:
 3. Enter the API key. Leave it empty for local servers, for example Ollama or vLLM.
 4. Enter the model name.
 5. Select the reasoning effort. The values are default, low, medium, and high. RubikBench sends this value in the request body.
-6. Enter the extra body parameters in JSON. RubikBench sends them with every chat-completion request. Use this field for model-specific values, for example "max_tokens".
-7. Enter the benchmark values. The main values are:
-   - The number of solves.
-   - The turn budget.
-   - The scramble length.
-   - The seed. Leave it empty for a random seed.
-8. Enter the scoring weights. The default weights are moves 0.5, conversation turns 0.3, and tool calls 0.2.
-9. Select "Start benchmark".
+6. Enter the max output tokens. Leave it empty to use the model default. RubikBench sends this value as "max_tokens" in the request body.
+7. Enter the max input tokens. Leave it empty for no limit. RubikBench does not send this value to the server. It trims the older conversation turns to keep the request below this value.
+8. Enter the extra body parameters in JSON. RubikBench sends them with every chat-completion request. Use this field for model-specific values, for example "max_completion_tokens".
+9. Enter the benchmark values. The main values are:
+  - The number of solves.
+  - The turn budget.
+  - The scramble length.
+  - The seed. Leave it empty for a random seed.
+10. Enter the scoring weights. The default weights are moves 0.5, conversation turns 0.3, and tool calls 0.2.
+11. Select "Start benchmark".
 
 RubikBench saves the configuration to the file `rubikbench_config.json` when the run starts.
 

@@ -284,3 +284,117 @@ def test_junk_turns_hit_budget():
     assert result.turns == 5
     assert result.score == 0.0
     assert result.error is None
+
+
+# --------------------------------------------------------------------------- token caps
+
+from rubikbench.benchmark import estimate_message_tokens, trim_messages
+
+
+def _msg(role: str, content: str = "", tool_calls=None) -> dict:
+    m = {"role": role}
+    if content:
+        m["content"] = content
+    if tool_calls:
+        m["tool_calls"] = tool_calls
+    return m
+
+
+def _tool_calls(arguments: str) -> list:
+    return [{"id": "c1", "type": "function", "function": {"name": "apply_moves", "arguments": arguments}}]
+
+
+def test_trim_disabled_without_cap():
+    messages = [_msg("system", "s"), _msg("user", "u"), _msg("assistant", "a")]
+    out, trimmed = trim_messages(messages, None)
+    assert out == messages
+    assert trimmed is False
+
+
+def test_trim_noop_under_cap():
+    messages = [_msg("system", "s" * 100), _msg("user", "u" * 100)]
+    out, trimmed = trim_messages(messages, 1000)
+    assert out == messages
+    assert trimmed is False
+
+
+def test_trim_keeps_system_and_initial_user():
+    messages = [
+        _msg("system", "s" * 100),
+        _msg("user", "u" * 100),
+        _msg("assistant", "a" * 1000),
+        _msg("tool", "t" * 1000),
+        _msg("assistant", "b" * 1000),
+        _msg("tool", "t" * 1000),
+        _msg("assistant", "c" * 1000),
+    ]
+    out, trimmed = trim_messages(messages, 200)
+    assert trimmed is True
+    assert out[0]["role"] == "system"
+    assert out[1]["role"] == "user"
+    assert estimate_message_tokens(out[0]) + estimate_message_tokens(out[1]) <= 200
+    # every remaining assistant message has its own tool results, no orphans
+    for i, m in enumerate(out):
+        if m["role"] == "tool":
+            assert out[i - 1]["role"] == "assistant"
+
+
+def test_trim_removes_complete_turn_units():
+    messages = [
+        _msg("system", "s"),
+        _msg("user", "u"),
+        _msg("assistant", "a" * 500),
+        _msg("tool", "t" * 500),
+        _msg("assistant", "b" * 500),
+        _msg("tool", "t" * 500),
+    ]
+    out, trimmed = trim_messages(messages, 400)
+    assert trimmed is True
+    # only the first (oldest) turn unit is removed; the second remains
+    assert all(m["role"] not in ("assistant", "tool") or m["content"] != "a" * 500 for m in out)
+    assert any(m.get("content") == "b" * 500 for m in out)
+
+
+def test_trim_small_cap_still_keeps_prefix():
+    messages = [
+        _msg("system", "s" * 100),
+        _msg("user", "u" * 100),
+        _msg("assistant", "a" * 500),
+    ]
+    out, trimmed = trim_messages(messages, 60)
+    assert trimmed is True
+    assert len(out) == 2
+    assert out[0]["role"] == "system"
+
+
+class RecordingClient:
+    """Wraps another client and records every messages list it receives."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.seen: list[list[dict]] = []
+
+    def complete(self, messages, tools, extra_body):
+        self.seen.append(list(messages))
+        return self.inner.complete(messages, tools, extra_body)
+
+
+def test_max_output_tokens_sent_in_body(mock):
+    server, url = mock
+    cfg = base_cfg(max_output_tokens=512, max_input_tokens=None)
+    run_solve(0, ["R", "U"], cfg, make_client(url))
+    assert server.seen_bodies[0]["max_tokens"] == 512
+
+
+def test_max_input_tokens_trims_history(mock):
+    _mock = mock
+    cfg = base_cfg(max_turns=10, max_input_tokens=200, allow_text_moves=False)
+    recording = RecordingClient(FixedContentClient("Hmm, let me think about this..."))
+    run_solve(0, ["R", "U"], cfg, recording)
+    # The cap is below the fixed system + initial user prefix size, so every
+    # request collapses to that prefix plus no middle turns.
+    assert len(recording.seen) == 10
+    for messages in recording.seen:
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
+        assert len(messages) == 2

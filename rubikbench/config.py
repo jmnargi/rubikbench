@@ -40,6 +40,11 @@ class BenchmarkConfig:
     extra_body: dict[str, Any] = field(default_factory=dict)
     #: Convenience field merged into ``extra_body`` under ``reasoning_effort``.
     reasoning_effort: str | None = None
+    #: Cap on generated tokens per reply, sent in the request body as ``max_tokens``.
+    max_output_tokens: int | None = None
+    #: Approximate cap on the request context (tokens). Older conversation turns
+    #: are trimmed to stay below this value; ``None`` disables trimming.
+    max_input_tokens: int | None = None
 
     # --- Benchmark ---------------------------------------------------------
     num_solves: int = 5
@@ -85,6 +90,10 @@ class BenchmarkConfig:
             raise ValueError("extra_body must be a JSON object")  # noqa: TRY004 - user-facing message
         if self.seed is not None and (not isinstance(self.seed, int) or self.seed < 0):
             raise ValueError("seed must be a non-negative integer or null")
+        if self.max_input_tokens is not None and self.max_input_tokens < 1:
+            raise ValueError("max_input_tokens must be >= 1 or null")
+        if self.max_output_tokens is not None and self.max_output_tokens < 1:
+            raise ValueError("max_output_tokens must be >= 1 or null")
 
     # --- Serialization -----------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
@@ -105,10 +114,12 @@ class BenchmarkConfig:
         return cfg
 
     def effective_extra_body(self) -> dict[str, Any]:
-        """``extra_body`` plus the explicit ``reasoning_effort`` field."""
+        """``extra_body`` plus the explicit reasoning effort and token cap fields."""
         body = dict(self.extra_body or {})
         if self.reasoning_effort:
             body["reasoning_effort"] = self.reasoning_effort
+        if self.max_output_tokens:
+            body["max_tokens"] = self.max_output_tokens
         return body
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from mock_openai import start_mock_server
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 from rubikbench.config import BenchmarkConfig
 from rubikbench.tui.app import RubikBenchApp
@@ -31,7 +31,7 @@ async def wait_for(app: RubikBenchApp, pred, timeout: float = 30.0) -> None:
 
 
 async def test_full_flow_through_tui(mock, tmp_path):
-    _, url = mock
+    server, url = mock
     cfg = BenchmarkConfig(base_url=url, api_key="k", model="mock", num_solves=2, max_turns=20, seed=3)
     config_file = tmp_path / "cfg.json"
     app = RubikBenchApp(config_path=config_file)
@@ -39,13 +39,16 @@ async def test_full_flow_through_tui(mock, tmp_path):
 
     async with app.run_test(size=(140, 44)) as pilot:
         await wait_for(app, lambda a: a.screen.__class__.__name__ == "ConfigScreen")
+        # exercise the token cap fields through the form
+        app.screen.query_one("#max_output_tokens", Input).value = "512"
+        app.screen.query_one("#max_input_tokens", Input).value = "4096"
         await pilot.click("#start_btn")
 
-
-        # config auto-saved on start
-        assert config_file.exists()
         saved = json.loads(config_file.read_text())
         assert saved["model"] == "mock"
+        assert saved["max_output_tokens"] == 512
+        assert saved["max_input_tokens"] == 4096
+        assert server.seen_bodies[0]["max_tokens"] == 512
 
         # results table populated
         results = app.screen

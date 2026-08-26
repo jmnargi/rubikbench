@@ -90,3 +90,30 @@ def test_save_and_load(tmp_path):
     assert loaded == cfg
     # no stray artifacts at the default path
     assert DEFAULT_CONFIG_PATH.exists() is False or DEFAULT_CONFIG_PATH.name != "rubikbench_config.json"
+
+
+def test_token_caps_roundtrip():
+    cfg = BenchmarkConfig(max_input_tokens=16384, max_output_tokens=4096)
+    restored = BenchmarkConfig.from_dict(cfg.to_dict())
+    assert restored.max_input_tokens == 16384
+    assert restored.max_output_tokens == 4096
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("max_input_tokens", 0), ("max_input_tokens", -3), ("max_output_tokens", 0)],
+)
+def test_token_cap_validation(field, value):
+    cfg = BenchmarkConfig()
+    setattr(cfg, field, value)
+    with pytest.raises(ValueError, match=field):
+        cfg.validate()
+
+
+def test_max_output_tokens_merged_into_body():
+    cfg = BenchmarkConfig(max_output_tokens=2048, extra_body={"temperature": 0.4})
+    body = cfg.effective_extra_body()
+    assert body["max_tokens"] == 2048
+    # explicit field wins over a stray extra_body entry
+    cfg2 = BenchmarkConfig(max_output_tokens=1024, extra_body={"max_tokens": 99})
+    assert cfg2.effective_extra_body()["max_tokens"] == 1024
