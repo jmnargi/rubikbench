@@ -10,4 +10,3 @@ rubikbench_results/
 .ruff_cache/
 .env
 .env.*
-!.env.example
