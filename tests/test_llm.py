@@ -123,6 +123,16 @@ def test_client_streaming_on_chunk_reports_deltas(mock):
     assert any(d.get("arguments") for d in deltas)
 
 
+def test_client_can_omit_stream_options(mock):
+    server, url = mock
+    client = make_client(url, stream=True, include_stream_options=False)
+    client.complete(
+        [{"role": "user", "content": "Scramble (2 moves): R U"}],
+        [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
+    )
+    assert "stream_options" not in server.seen_bodies[0]
+
+
 def test_client_surfaces_http_errors():
     server, url = start_mock_server(fail_first_n=1, status=429)
     try:
@@ -150,13 +160,13 @@ def test_execute_tool_apply_moves_invalid_tokens():
     assert ctx.cube.history == ["R"]
 
 
-def test_execute_tool_reset():
+def test_execute_tool_reset_is_rejected():
+    # reset_cube was removed; it should now be treated as an unknown tool.
     ctx = SolveContext(["R", "U", "F"])
     ctx.cube.apply(["R", "U", "F"])
     out = execute_tool("reset_cube", {}, ctx)
-    assert "original scramble" in out
-    assert ctx.cube.history == []
-    assert not ctx.cube.is_solved()
+    assert "Unknown tool" in out
+    assert ctx.cube.history == ["R", "U", "F"]
 
 
 def test_execute_tool_unknown_tool():
@@ -347,6 +357,30 @@ def test_junk_turns_hit_budget():
     assert result.error is None
 
 
+def test_raw_tool_call_markup_is_rejected_and_nudged():
+    cfg = base_cfg(max_turns=3, allow_text_moves=False)
+    result = run_solve(0, ["R", "U"], cfg, FixedContentClient("<apply_moves>moves: R U R'</apply_moves>"))
+    assert not result.solved
+    assert result.total_moves == 0
+    assert result.tool_calls == 0
+    assert any(
+        m["role"] == "user" and "apply_moves tool" in m.get("content", "")
+        for m in result.transcript
+    )
+
+
+def test_empty_turn_is_rejected_and_nudged():
+    cfg = base_cfg(max_turns=3, allow_text_moves=False)
+    result = run_solve(0, ["R", "U"], cfg, FixedContentClient(""))
+    assert not result.solved
+    assert result.total_moves == 0
+    assert result.tool_calls == 0
+    assert any(
+        m["role"] == "user" and "empty" in m.get("content", "")
+        for m in result.transcript
+    )
+
+
 # --------------------------------------------------------------------------- token caps
 
 from rubikbench.benchmark import estimate_message_tokens, trim_messages
@@ -494,7 +528,9 @@ def test_initial_prompt_does_not_leak_scramble():
     assert "Scramble" not in prompt
     assert " ".join(scramble) not in prompt
     assert cube.facelet_string() in prompt  # the state IS given
-    assert "as few tool calls as possible" in SYSTEM_PROMPT
+    assert "Goal: solve the cube" in SYSTEM_PROMPT
+    assert "apply_moves" in SYSTEM_PROMPT
+    assert "reset_cube" not in SYSTEM_PROMPT.lower()
 
 
 def test_loop_first_message_has_no_scramble(mock):

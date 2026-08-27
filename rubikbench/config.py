@@ -53,6 +53,10 @@ class BenchmarkConfig:
     #: Approximate cap on the request context (tokens). Older conversation turns
     #: are trimmed to stay below this value; ``None`` disables trimming.
     max_input_tokens: int | None = None
+    #: Whether to request per-stream usage via ``stream_options.include_usage``.
+    #: Some LiteLLM proxies and gateways buffer the stream when this is enabled,
+    #: so it can be disabled with ``--no-stream-options``.
+    include_stream_options: bool = True
 
     # --- Benchmark ---------------------------------------------------------
     num_solves: int = 5
@@ -319,6 +323,8 @@ def apply_env_overrides(cfg: BenchmarkConfig) -> BenchmarkConfig:
             overrides[field_name] = cast(raw)
         except ValueError as exc:
             raise ValueError(f"{env_name} must be a number, got {raw!r}") from exc
+    if os.environ.get("RUBIKBENCH_NO_STREAM_OPTIONS", "").lower() in ("1", "true", "yes"):
+        overrides["include_stream_options"] = False
     return replace(cfg, **overrides)
 
 

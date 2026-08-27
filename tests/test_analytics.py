@@ -240,15 +240,13 @@ def test_export_includes_analytics(mock, tmp_path):
 
 
 def test_timeline_states_match_transcript_actions(mock):
-    """Every apply/reset timeline entry matches a tool transcript entry."""
+    """Every timeline entry matches a tool transcript entry."""
     _, url = mock
     result = run_solve(0, scramble, base_cfg(base_url=url), make_client(url))
     tool_entries = [e for e in result.transcript if e.get("role") == "tool"]
-    timeline_tool = [e for e in result.timeline if e["action"] in ("apply", "reset")]
+    timeline_tool = [e for e in result.timeline if e["action"] == "apply"]
     assert len(timeline_tool) == len(tool_entries)
     for entry, tool in zip(timeline_tool, tool_entries):
-        if entry["action"] == "apply":
-            assert tool["name"] == "apply_moves"
-            assert "moves" in tool["arguments"]
-        elif entry["action"] == "reset":
-            assert tool["name"] == "reset_cube"
+        assert entry["action"] == "apply"
+        assert tool["name"] == "apply_moves"
+        assert "moves" in tool["arguments"]

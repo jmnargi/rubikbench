@@ -42,6 +42,11 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", type=str, default=None, help="model name (overrides RUBIKBENCH_MODEL)")
     parser.add_argument("--max-input-tokens", type=int, default=None, help="context cap (overrides RUBIKBENCH_MAX_INPUT_TOKENS)")
     parser.add_argument("--max-output-tokens", type=int, default=None, help="sent as max_tokens (overrides RUBIKBENCH_MAX_OUTPUT_TOKENS)")
+    parser.add_argument(
+        "--no-stream-options",
+        action="store_true",
+        help="omit stream_options.include_usage (use if your proxy buffers the stream)",
+    )
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (overrides RUBIKBENCH_TEMPERATURE)")
     parser.add_argument("--timeout", type=float, default=None, help="request timeout in seconds (overrides RUBIKBENCH_TIMEOUT)")
     parser.add_argument("--max-retries", type=int, default=None, help="retries per request (overrides RUBIKBENCH_MAX_RETRIES)")
@@ -135,6 +140,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "seed": args.seed,
     }
     overrides = {k: v for k, v in cli_overrides.items() if v is not None}
+    if args.no_stream_options:
+        overrides["include_stream_options"] = False
     if overrides:
         cfg = replace(cfg, **overrides)
         try:
@@ -163,6 +170,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         stream=True,
         temperature=cfg.temperature,
         max_output_tokens=cfg.max_output_tokens,
+        include_stream_options=cfg.include_stream_options,
         extra_body=cfg.effective_extra_body(),
         tool_choice=cfg.tool_choice if cfg.tool_choice != "auto" else "auto",
     )

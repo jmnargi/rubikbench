@@ -123,6 +123,25 @@ def test_headless_run_cli_args_override_env(mock, tmp_path, capsys, monkeypatch)
     assert server.seen_bodies[0]["max_tokens"] == 128
 
 
+def test_cli_no_stream_options_flag(mock, tmp_path, capsys, monkeypatch):
+    """--no-stream-options removes stream_options from the request body."""
+    server, url = mock
+    monkeypatch.setenv("RUBIKBENCH_MODEL", "mock")
+    out = tmp_path / "out.jsonl"
+    code = main([
+        "run",
+        "--base-url", url,
+        "--api-key", "k",
+        "--model", "mock",
+        "-n", "1",
+        "--no-stream-options",
+        "-o", str(out),
+        "--no-color",
+    ])
+    assert code == 0
+    assert "stream_options" not in server.seen_bodies[0]
+
+
 def test_bare_command_runs_from_env(mock, tmp_path, capsys, monkeypatch):
     """`rubikbench` with no subcommand starts the benchmark from .env."""
     _, url = mock

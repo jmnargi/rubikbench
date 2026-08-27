@@ -23,7 +23,7 @@ from .config import BenchmarkConfig
 from .cube import Cube, parse_moves
 from .llm import LLMClient, LLMError
 from .prompts import SYSTEM_PROMPT, TOOLS, initial_user_prompt
-from .rendering import render_plain
+from .rendering import render_faces, render_plain
 from .scoring import Weights, compute_score
 from .scramble import (
     assert_valid_scramble,
@@ -56,14 +56,14 @@ class SolveContext:
         self.cube.scramble = self.scramble
         self.cube.reset_to_scramble()
         self.total_moves = 0
-        self.resets = 0
 
     def state_text(self) -> str:
         cube = self.cube
         history = " ".join(cube.history[-25:]) or "(none)"
         return (
-            f"Facelets (U R F D L B): {cube.facelet_string()}\n"
-            f"Net:\n{render_plain(cube.facelets)}\n"
+            f"Facelets (U R F D L B): {cube.facelet_string()}\n\n"
+            f"Faces (each is a 3x3 grid, rows top-to-bottom):\n{render_faces(cube.facelets)}\n\n"
+            f"Compact net:\n{render_plain(cube.facelets)}\n\n"
             f"Move history ({len(cube.history)}): {history}\n"
             f"Solved: {cube.is_solved()}"
         )
@@ -92,13 +92,6 @@ def execute_tool(name: str, arguments: dict[str, Any], ctx: SolveContext) -> str
             f"{ctx.state_text()}"
             + ("\n*** The cube is SOLVED. ***" if solved else "")
         )
-    if name == "reset_cube":
-        cube.reset_to_scramble()
-        ctx.resets += 1
-        return (
-            f"Cube reset to the original scramble. {ctx.resets} reset(s) so far.\n"
-            f"{ctx.state_text()}"
-        )
     return f"Unknown tool: {name}"
 
 
@@ -112,7 +105,6 @@ class SolveResult:
     turns: int
     tool_calls: int
     total_moves: int
-    resets: int
     elapsed: float
     prompt_tokens: int
     completion_tokens: int
@@ -171,6 +163,18 @@ class BenchmarkResult:
         }
 
 # --------------------------------------------------------------------------- context trimming
+
+def _looks_like_raw_tool_call(text: str) -> str | None:
+    """Detect raw XML / pseudo-tool-call blocks the model emitted instead of calling the tool."""
+    if not text:
+        return None
+    for name in ("apply_moves", "reset_cube"):
+        if f"<{name}" in text or f"</{name}>" in text:
+            return name
+    if "<function=" in text or "<tool>" in text or "<tool_call>" in text:
+        return "tool"
+    return None
+
 
 def estimate_tokens(text: str | None) -> int:
     """Rough token estimate: about 4 characters per token (common heuristic)."""
@@ -371,7 +375,7 @@ def run_solve(
                 # shape (e.g. a list for the arguments). Treat it as empty and
                 # let the tool reply with an error the model can recover from.
                 args = tc.arguments if isinstance(tc.arguments, dict) else {}
-                action = "apply" if tc.name == "apply_moves" else "reset"
+                action = "apply"
                 proposed: list[str] = []
                 if tc.name == "apply_moves":
                     proposed, _ = parse_moves(str(args.get("moves", "") or ""))
@@ -396,7 +400,21 @@ def run_solve(
                     break
         else:
             text = (turn.content or "").strip()
-            if cfg.allow_text_moves and text and not solved:
+            raw_tool = _looks_like_raw_tool_call(text)
+            if raw_tool:
+                _emit(emitter, "log", index=index, level="error",
+                      message=(f"Turn {turns}: model emitted raw {raw_tool} markup instead of "
+                               "calling the apply_moves tool."))
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your last response contained a raw tool-call block but did not use the "
+                        "apply_moves tool. Please call the apply_moves tool with the moves you "
+                        "want to make. Raw XML, JSON, or text move lists are not applied."
+                    ),
+                })
+                transcript.append({"turn": turns, "role": "user", "content": messages[-1]["content"]})
+            elif cfg.allow_text_moves and text and not solved:
                 valid, invalid = ctx.cube.apply_text(text)
                 if valid:
                     ctx.total_moves += len(valid)
@@ -410,12 +428,36 @@ def run_solve(
                     push_timeline("text", valid)
                     if ctx.cube.is_solved():
                         solved = True
-                elif not any(k in text.lower() for k in ("error", "sorry", "fix", "retry", "invalid")):
+                else:
                     _emit(emitter, "log", index=index, level="warn",
-                          message=f"Turn {turns}: no moves or tool call; turn wasted.")
-                _emit(emitter, "state", index=index, facelets=ctx.cube.facelets,
-                      history=list(ctx.cube.history), total_moves=ctx.total_moves,
-                      turns=turns, tool_calls=tool_calls_total, solved=ctx.cube.is_solved())
+                          message=f"Turn {turns}: no valid moves parsed from text; use apply_moves.")
+                    nudge = (
+                        "Your last response did not include a valid tool call. "
+                        "Use the apply_moves tool to make moves on the cube."
+                    )
+                    messages.append({"role": "user", "content": nudge})
+                    transcript.append({"turn": turns, "role": "user", "content": nudge})
+            elif text:
+                _emit(emitter, "log", index=index, level="warn",
+                      message=f"Turn {turns}: no tool call; response ignored.")
+                nudge = (
+                    "Your last response did not include a tool call. "
+                    "Use the apply_moves tool to make moves on the cube."
+                )
+                messages.append({"role": "user", "content": nudge})
+                transcript.append({"turn": turns, "role": "user", "content": nudge})
+            else:
+                _emit(emitter, "log", index=index, level="error",
+                      message=f"Turn {turns}: model returned an empty response; a tool call is required.")
+                nudge = (
+                    "Your last response was empty. "
+                    "Use the apply_moves tool to make moves on the cube."
+                )
+                messages.append({"role": "user", "content": nudge})
+                transcript.append({"turn": turns, "role": "user", "content": nudge})
+            _emit(emitter, "state", index=index, facelets=ctx.cube.facelets,
+                  history=list(ctx.cube.history), total_moves=ctx.total_moves,
+                  turns=turns, tool_calls=tool_calls_total, solved=ctx.cube.is_solved())
         if solved:
             break
 
@@ -438,7 +480,6 @@ def run_solve(
         turns=turns,
         tool_calls=tool_calls_total,
         total_moves=ctx.total_moves,
-        resets=ctx.resets,
         elapsed=round(elapsed, 3),
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -567,7 +608,6 @@ def solve_to_dict(solve: SolveResult) -> dict[str, Any]:
         "turns": solve.turns,
         "tool_calls": solve.tool_calls,
         "total_moves": solve.total_moves,
-        "resets": solve.resets,
         "elapsed": solve.elapsed,
         "retries": solve.retries,
         "truncated": solve.truncated,

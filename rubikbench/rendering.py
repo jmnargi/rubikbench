@@ -15,6 +15,16 @@ FACE_COLORS = {
     "B": "#3366FF",  # blue
 }
 
+# Human-readable color name for each face.
+FACE_NAMES = {
+    "U": "white",
+    "R": "red",
+    "F": "green",
+    "D": "yellow",
+    "L": "orange",
+    "B": "blue",
+}
+
 _INDENT = "        "  # 8 spaces: aligns U/D under the F column of the 4-wide row
 
 def _row(facelets: list[str], faces: str, row: int) -> str:
@@ -57,6 +67,17 @@ def render_colored(facelets: list[str]) -> Text:
         text.append_text(_row_colored(facelets, "D", row))
         text.append("\n")
     return text
+
+
+def render_faces(facelets: list[str]) -> str:
+    """A labeled 3x3 grid for each face; easier for models to read than the compact net."""
+    lines = []
+    for face in FACES_ORDER:
+        start = FACES_ORDER.index(face) * 9
+        lines.append(f"{face} ({FACE_NAMES[face]}):")
+        for row in range(3):
+            lines.append(" ".join(facelets[start + row * 3 : start + row * 3 + 3]))
+    return "\n".join(lines)
 
 
 def _row_colored(facelets: list[str], faces: str, row: int) -> Text:

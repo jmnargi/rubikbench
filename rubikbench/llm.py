@@ -74,6 +74,7 @@ class OpenAICompatibleClient:
         stream: bool = False,
         temperature: float | None = None,
         max_output_tokens: int | None = None,
+        include_stream_options: bool = True,
         extra_body: dict[str, Any] | None = None,
         tool_choice: str = "auto",
     ) -> None:
@@ -84,6 +85,7 @@ class OpenAICompatibleClient:
         self._stream = stream
         self._temperature = temperature
         self._max_output_tokens = max_output_tokens
+        self._include_stream_options = include_stream_options
         self._extra_body = dict(extra_body or {})
         self._tool_choice = tool_choice
         # The SDK must not retry internally: retries with backoff are owned by
@@ -117,10 +119,10 @@ class OpenAICompatibleClient:
             # Standard OpenAI-compatible parameter; LiteLLM proxies and vLLM
             # accept ``max_tokens`` at the top level (not inside extra_body).
             kwargs["max_tokens"] = self._max_output_tokens
-        if self._stream:
+        if self._stream and self._include_stream_options:
             # Ask the server to include usage in the stream so live token counts
-            # can be shown; supported by OpenAI-compatible servers (LiteLLM
-            # proxies included).
+            # can be shown. Some gateways buffer the whole response when this
+            # is set, so ``--no-stream-options`` lets you disable it.
             kwargs.setdefault("stream_options", {"include_usage": True})
 
         started = time.monotonic()

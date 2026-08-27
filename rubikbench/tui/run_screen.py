@@ -93,7 +93,7 @@ class RunScreen(Screen):
         self._tok_out = 0
         self._tok_cached = 0
         self._tok_total = 0
-        self._usage_turn: int | None = None
+        self._usage_turns_added: set[int] = set()
 
         self._solve_started = time.monotonic()
         self._stats_timer = None
@@ -171,6 +171,7 @@ class RunScreen(Screen):
             stream=True,
             temperature=self.config.temperature,
             max_output_tokens=self.config.max_output_tokens,
+            include_stream_options=self.config.include_stream_options,
             extra_body=body,
             tool_choice=self.config.tool_choice,
         )
@@ -203,6 +204,10 @@ class RunScreen(Screen):
             self.post_message(TurnMsg(
                 payload["turn"], payload["content"], payload["tool_call_names"],
                 payload["latency"], payload.get("reasoning"),
+                payload.get("prompt_tokens", 0),
+                payload.get("completion_tokens", 0),
+                payload.get("cached_tokens", 0),
+                payload.get("total_tokens", 0),
             ))
         elif kind == "tool_call":
             self.post_message(ToolCallMsg(payload["turn"], payload["name"], payload["arguments"], payload["action"]))
@@ -229,9 +234,9 @@ class RunScreen(Screen):
         if kind == "divider":
             return f"[dim]── {text} ──[/dim]"
         if kind == "reasoning":
-            return f"[grey62 italic]{escape(text)}[/]" if self._show_reasoning else ""
+            return f"[#888888 italic]{escape(text)}[/]" if self._show_reasoning else ""
         if kind == "content":
-            return escape(text)
+            return f"[white]{escape(text)}[/]"
         if kind == "result":
             return f"[dim]{escape(text)}[/dim]"
         return text  # tool / log entries already carry markup
@@ -247,9 +252,9 @@ class RunScreen(Screen):
     def _render_live(self) -> str:
         parts: list[str] = []
         if self._live_reasoning and self._show_reasoning:
-            parts.append(f"[grey62 italic]{escape(self._live_reasoning)}[/]")
+            parts.append(f"[#888888 italic]{escape(self._live_reasoning)}[/]")
         if self._live_content:
-            parts.append(escape(self._live_content))
+            parts.append(f"[white]{escape(self._live_content)}[/]")
         for idx in sorted(self._live_tool_slots):
             slot = self._live_tool_slots[idx]
             name = slot["name"] or "…"
@@ -263,6 +268,25 @@ class RunScreen(Screen):
     def _update_live(self) -> None:
         self.query_one("#live-text", Static).update(self._render_live())
         self._scroll_model()
+
+    def _add_usage(self, turn: int, usage: dict[str, int] | None) -> None:
+        """Add usage once per turn (stream chunk or turn summary)."""
+        if not usage or turn in self._usage_turns_added:
+            return
+        prompt = usage.get("prompt", 0)
+        completion = usage.get("completion", 0)
+        cached = usage.get("cached", 0)
+        total = usage.get("total", 0)
+        if prompt == 0 and completion == 0 and cached == 0 and total == 0:
+            return
+        self._usage_turns_added.add(turn)
+        self._tok_in += prompt
+        self._tok_out += completion
+        self._tok_cached += cached
+        self._tok_total += total
+        self.query_one("#st-tok-in", Label).update(f"{self._tok_in:,}")
+        self.query_one("#st-tok-out", Label).update(f"{self._tok_out:,}")
+        self.query_one("#st-tok-cached", Label).update(f"{self._tok_cached:,}")
 
     def _scroll_model(self) -> None:
         self.query_one("#model-scroll", VerticalScroll).scroll_end(animate=False)
@@ -326,16 +350,7 @@ class RunScreen(Screen):
         if msg.ttft and self._live_ttft is None:
             self._live_ttft = msg.ttft
             self.query_one("#run-status", Static).update(f"streaming… · first token {msg.ttft:.1f}s")
-        if msg.usage and msg.turn != self._usage_turn:
-            # OpenAI sends usage once per request (on the final chunk).
-            self._usage_turn = msg.turn
-            self._tok_in += msg.usage.get("prompt", 0)
-            self._tok_out += msg.usage.get("completion", 0)
-            self._tok_cached += msg.usage.get("cached", 0)
-            self._tok_total += msg.usage.get("total", 0)
-            self.query_one("#st-tok-in", Label).update(f"{self._tok_in:,}")
-            self.query_one("#st-tok-out", Label).update(f"{self._tok_out:,}")
-            self.query_one("#st-tok-cached", Label).update(f"{self._tok_cached:,}")
+        self._add_usage(msg.turn, msg.usage)
         self._update_live()
 
     @on(TurnMsg)
@@ -348,6 +363,15 @@ class RunScreen(Screen):
             self._append_history("reasoning", msg.reasoning.strip())
         if msg.content and msg.content.strip():
             self._append_history("content", msg.content.strip())
+        self._add_usage(
+            msg.turn,
+            {
+                "prompt": msg.prompt_tokens,
+                "completion": msg.completion_tokens,
+                "cached": msg.cached_tokens,
+                "total": msg.total_tokens,
+            },
+        )
         self._live_turn = None
         self._live_content = ""
         self._live_reasoning = ""

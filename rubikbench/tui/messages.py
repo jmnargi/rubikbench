@@ -60,6 +60,10 @@ class TurnMsg(Message):
         tool_call_names: list[str],
         latency: float,
         reasoning: str | None = None,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        cached_tokens: int = 0,
+        total_tokens: int = 0,
     ) -> None:
         super().__init__()
         self.turn = turn
@@ -67,6 +71,10 @@ class TurnMsg(Message):
         self.tool_call_names = tool_call_names
         self.latency = latency
         self.reasoning = reasoning
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.cached_tokens = cached_tokens
+        self.total_tokens = total_tokens
 
 
 class StreamMsg(Message):

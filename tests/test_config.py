@@ -232,6 +232,13 @@ def test_config_from_env_bad_knob(monkeypatch):
         config_from_env()
 
 
+def test_no_stream_options_env_override(monkeypatch):
+    monkeypatch.setenv("RUBIKBENCH_NO_STREAM_OPTIONS", "1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = config_from_env()
+    assert cfg.include_stream_options is False
+
+
 def test_apply_env_overrides_preset_key_wins_over_file(monkeypatch):
     cfg = BenchmarkConfig(base_url=PRESETS["OpenRouter"]["base_url"], api_key="stored", model="stored-model")
     monkeypatch.setenv("OPENROUTER_API_KEY", "from-env")

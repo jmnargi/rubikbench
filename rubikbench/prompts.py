@@ -3,48 +3,31 @@
 from __future__ import annotations
 
 from .cube import Cube
-from .rendering import render_plain
+from .rendering import render_faces, render_plain
 
-SYSTEM_PROMPT = """You are solving a 3x3x3 Rubik's cube programmatically and will be benchmarked on it.
+SYSTEM_PROMPT = """You are solving a 3x3x3 Rubik's cube programmatically.
 
-The cube uses standard Singmaster notation: U, D, L, R, F, B are quarter turns of the Up, Down,
-Left, Right, Front, Back faces; an apostrophe means counter-clockwise (e.g. R'), and a 2 means a
-half turn (e.g. U2). Move lists are space-separated, like "R U R' U'".
+Singmaster notation: U, D, L, R, F, B are 90° clockwise quarter turns of the Up, Down, Left,
+Right, Front, Back faces. An apostrophe means counter-clockwise (e.g. R'), and a 2 means a half
+turn (e.g. U2). Move lists are space-separated, like "R U R' U'".
 
-Your objective: solve the cube with as few tool calls as possible. You only receive the cube
-state; you never receive the scramble. You must derive the solution yourself.
+Goal: solve the cube. You are given the current cube state in every message; derive the solution
+yourself. Do not ask for help. Do not explain your reasoning in the final response.
 
-The current cube state (facelet string, colored net, move history and counts) is always provided:
-it is in your initial message, and every tool result you receive includes the updated state. You
-never need to request it.
+You have exactly one tool:
+- apply_moves: apply one or more moves to the cube. You may call it with a single move or with many
+  moves at once. This is the ONLY way to change the cube. Move text in your reply is not applied.
 
-You have these tools:
-- apply_moves: apply one or more moves in a single call. This is the ONLY way to change the cube.
-  Move text you write in your reply is not applied.
-- reset_cube: restore the original scramble (discards all moves so far; costs you turns).
-
-Scoring (0-1000, solved runs only):
-- 50% efficiency = par_moves / total_moves, where par_moves is a near-optimal solution length
-  (~20 moves; God's number). Efficient human methods take 50-70 moves; beginner methods 120-200.
-- 30% turn economy = how few of your replies (turns) you used.
-- 20% tool economy = how few tool calls you made (ideally one batch per turn).
-You want the cube SOLVED with as few total moves, as few turns, and as few tool calls as possible.
-
-Plan before you act:
-- Derive the full solution in your head, then apply it. One single apply_moves call is ideal.
-- Batch many moves into one apply_moves call. Never make one call per move.
-- The tool result will tell you the new state and whether the cube is solved. Do not call any tool
-  just to observe; state comes with every result.
-- If you mess up, reset_cube is cheaper than wandering (it costs turns but no moves).
-- When you are confident the cube is solved, reply briefly, e.g. "The cube is solved."."""
+Scoring depends on total moves, turns, and tool calls used. Fewer is better."""
 
 
 def initial_user_prompt(cube: Cube) -> str:
     """The first user message: the cube state only, never the scramble."""
     return (
         "Solve the cube from this state.\n"
-        f"Facelet string (faces in order U R F D L B):\n{cube.facelet_string()}\n"
-        f"Cube net:\n{render_plain(cube.facelets)}\n\n"
+        f"Facelet string (faces in order U R F D L B):\n{cube.facelet_string()}\n\n"
+        f"Faces (each is a 3x3 grid, rows top-to-bottom):\n{render_faces(cube.facelets)}\n\n"
+        f"Compact net:\n{render_plain(cube.facelets)}\n\n"
         "The state above is the current state. Every tool result will include the updated state."
     )
 
@@ -69,17 +52,6 @@ TOOLS = [
                 },
                 "required": ["moves"],
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "reset_cube",
-            "description": (
-                "Restore the original scramble, discarding all moves applied so far. Useful when "
-                "the solve has gone off track. Costs extra turns (and thus score), but no moves."
-            ),
-            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
