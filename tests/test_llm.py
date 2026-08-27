@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 
 import pytest
 from mock_openai import MockApiError, start_mock_server
@@ -123,14 +124,93 @@ def test_client_streaming_on_chunk_reports_deltas(mock):
     assert any(d.get("arguments") for d in deltas)
 
 
-def test_client_can_omit_stream_options(mock):
+def test_client_always_sends_stream_options(mock):
+    """Streaming requests always request per-stream usage via stream_options."""
     server, url = mock
-    client = make_client(url, stream=True, include_stream_options=False)
+    client = make_client(url, stream=True)
     client.complete(
         [{"role": "user", "content": "Scramble (2 moves): R U"}],
         [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
     )
-    assert "stream_options" not in server.seen_bodies[0]
+    assert server.seen_bodies[0]["stream_options"] == {"include_usage": True}
+
+def test_client_sends_top_p_top_level(mock):
+    """top_p is a standard OpenAI parameter and goes top-level, not extra_body."""
+    server, url = mock
+    client = make_client(url, stream=True, top_p=0.9)
+    client.complete(
+        [{"role": "user", "content": "Scramble (2 moves): R U"}],
+        [{"type": "function", "function": {"name": "apply_moves", "parameters": {"type": "object", "properties": {}}}}],
+    )
+    body = server.seen_bodies[0]
+    assert body["top_p"] == 0.9
+    assert "top_p" not in (body.get("extra_body") or {})
+
+
+def test_client_sends_sampling_params_via_extra_body(mock):
+    """repetition_penalty and top_k are vLLM knobs; they ride in extra_body."""
+    server, url = mock
+    client = make_client(
+        url,
+        stream=True,
+        extra_body={"repetition_penalty": 1.15, "top_k": 40, "reasoning_effort": "high"},
+    )
+    client.complete(
+        [{"role": "user", "content": "Scramble (2 moves): R U"}],
+        [],
+    )
+    body = server.seen_bodies[0]
+    assert body["repetition_penalty"] == 1.15
+    assert body["top_k"] == 40
+    assert body["reasoning_effort"] == "high"
+
+
+def test_loop_detection_aborts_looping_stream(mock):
+    """A stream that repeats a short pattern is killed and retried."""
+    server, url = mock
+    server.agent = lambda body: {"content": "R U R U R U R U R U R U", "finish_reason": "stop"}
+    client = make_client(url, stream=True)
+    with pytest.raises(LLMError, match="looping"):
+        client.complete([{"role": "user", "content": "Scramble (2 moves): R U"}], [])
+
+
+def test_loop_detection_can_be_disabled(mock):
+    """With loop_detection off, a repeating stream completes normally."""
+    server, url = mock
+    server.agent = lambda body: {"content": "R U R U R U R U R U R U", "finish_reason": "stop"}
+    client = make_client(url, stream=True, loop_detection=False)
+    turn = client.complete([{"role": "user", "content": "Scramble (2 moves): R U"}], [])
+    assert turn.content == "R U R U R U R U R U R U"
+
+def test_idle_timeout_aborts_stalled_stream():
+    """A stream that stops producing chunks after the header is killed and retried."""
+    import http.server
+
+    class StallingHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(
+                b'data: {"choices":[{"delta":{"role":"assistant","content":""},"index":0}]}\n\n'
+            )
+            self.wfile.flush()
+            time.sleep(2)  # stall: client must abort before this returns
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), StallingHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address
+    client = make_client(f"http://{host}:{port}/v1", stream=True, stream_idle_timeout=0.2)
+    try:
+        with pytest.raises(LLMError, match="watchdog"):
+            client.complete([{"role": "user", "content": "hi"}], [])
+    finally:
+        server.shutdown()
 
 
 def test_client_surfaces_http_errors():

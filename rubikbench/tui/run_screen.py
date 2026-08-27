@@ -99,6 +99,11 @@ class RunScreen(Screen):
         self._solve_started = time.monotonic()
         self._stats_timer = None
 
+        # Live pane render throttling: coalesce high-frequency chunks so a
+        # fast stream never stalls the UI thread re-rendering a growing string.
+        self._live_dirty = False
+        self._last_live_render = 0.0
+
     # ------------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
         with Horizontal(id="run-body"):
@@ -172,8 +177,10 @@ class RunScreen(Screen):
             max_retries=self.config.max_retries,
             stream=True,
             temperature=self.config.temperature,
+            top_p=self.config.top_p,
             max_output_tokens=self.config.max_output_tokens,
-            include_stream_options=self.config.include_stream_options,
+            stream_idle_timeout=self.config.stream_idle_timeout,
+            loop_detection=self.config.loop_detection,
             extra_body=body,
             tool_choice=self.config.tool_choice,
         )
@@ -280,8 +287,17 @@ class RunScreen(Screen):
         return "\n".join(parts)
 
     def _update_live(self) -> None:
+        """Render the live pane now (toggles and final flushes use this)."""
+        self._last_live_render = time.monotonic()
+        self._live_dirty = False
         self.query_one("#live-text", Static).update(self._render_live())
         self._scroll_model()
+
+    def _maybe_flush_live(self) -> None:
+        """Coalesced render: re-render at most every ~30ms while streaming."""
+        self._live_dirty = True
+        if time.monotonic() - self._last_live_render >= 0.03:
+            self._update_live()
 
     def _add_usage(self, turn: int, usage: dict[str, int] | None) -> None:
         """Add usage with delta math; some proxies report cumulative per-chunk totals."""
@@ -392,7 +408,7 @@ class RunScreen(Screen):
             self._live_ttft = msg.ttft
             self.query_one("#run-status", Static).update(f"streaming… · first token {msg.ttft:.1f}s")
         self._add_usage(msg.turn, msg.usage)
-        self._update_live()
+        self._maybe_flush_live()
 
     @on(TurnMsg)
     def _on_turn(self, msg: TurnMsg) -> None:

@@ -36,6 +36,12 @@ class BenchmarkConfig:
     api_key: str = ""
     model: str = "gpt-4o"
     temperature: float | None = None
+    #: Nucleus sampling (standard OpenAI ``top_p``). ``None`` omits the field.
+    top_p: float | None = None
+    #: vLLM/llama.cpp-style repetition penalty, merged into ``extra_body``.
+    repetition_penalty: float | None = None
+    #: vLLM-style top-k sampling, merged into ``extra_body``.
+    top_k: int | None = None
     stream: bool = False
     timeout: float = 120.0
     max_retries: int = 2
@@ -53,11 +59,12 @@ class BenchmarkConfig:
     #: Approximate cap on the request context (tokens). Older conversation turns
     #: are trimmed to stay below this value; ``None`` disables trimming.
     max_input_tokens: int | None = None
-    #: Whether to request per-stream usage via ``stream_options.include_usage``.
-    #: ``None`` means "auto": enabled only for the official OpenAI endpoint,
-    #: disabled for every other base URL (many LiteLLM proxies buffer the stream
-    #: when this is on). Override with ``--stream-options`` / ``--no-stream-options``.
-    include_stream_options: bool | None = None
+    #: Abort a streaming request and retry if no chunk arrives for this many
+    #: seconds (idle watchdog). ``None`` disables it and relies on ``timeout``.
+    stream_idle_timeout: float | None = None
+    #: Abort a streaming request when the model's output loops (repeats a short
+    #: pattern). Safe to leave on; only fires on clear, tight repetition.
+    loop_detection: bool = True
 
     # --- Benchmark ---------------------------------------------------------
     num_solves: int = 5
@@ -111,6 +118,14 @@ class BenchmarkConfig:
             raise ValueError("cache_retention must be >= 1 or null")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be >= 1 or null")
+        if self.top_p is not None and not (0 < self.top_p <= 1):
+            raise ValueError("top_p must be in (0, 1] or null")
+        if self.top_k is not None and self.top_k < 1:
+            raise ValueError("top_k must be >= 1 or null")
+        if self.repetition_penalty is not None and self.repetition_penalty <= 0:
+            raise ValueError("repetition_penalty must be > 0 or null")
+        if self.stream_idle_timeout is not None and self.stream_idle_timeout <= 0:
+            raise ValueError("stream_idle_timeout must be > 0 or null")
         from .scramble import PREMADE_SCRAMBLES
 
         if self.scramble_preset not in ("", "file", *PREMADE_SCRAMBLES):
@@ -153,6 +168,10 @@ class BenchmarkConfig:
             body["reasoning_effort"] = self.reasoning_effort
         if self.cache_retention:
             body["prompt_cache_retention"] = self.cache_retention
+        if self.repetition_penalty is not None:
+            body["repetition_penalty"] = self.repetition_penalty
+        if self.top_k is not None:
+            body["top_k"] = self.top_k
         return body
 
 
@@ -294,6 +313,10 @@ _ENV_KNOBS: dict[str, tuple[str, Any]] = {
     "RUBIKBENCH_MAX_RETRIES": ("max_retries", int),
     "RUBIKBENCH_TIMEOUT": ("timeout", float),
     "RUBIKBENCH_TEMPERATURE": ("temperature", float),
+    "RUBIKBENCH_TOP_P": ("top_p", float),
+    "RUBIKBENCH_REPETITION_PENALTY": ("repetition_penalty", float),
+    "RUBIKBENCH_TOP_K": ("top_k", int),
+    "RUBIKBENCH_STREAM_IDLE_TIMEOUT": ("stream_idle_timeout", float),
 }
 
 
@@ -324,12 +347,12 @@ def apply_env_overrides(cfg: BenchmarkConfig) -> BenchmarkConfig:
             overrides[field_name] = cast(raw)
         except ValueError as exc:
             raise ValueError(f"{env_name} must be a number, got {raw!r}") from exc
-    stream_opt = os.environ.get("RUBIKBENCH_STREAM_OPTIONS", "").lower()
-    no_stream_opt = os.environ.get("RUBIKBENCH_NO_STREAM_OPTIONS", "").lower()
-    if stream_opt in ("1", "true", "yes"):
-        overrides["include_stream_options"] = True
-    elif no_stream_opt in ("1", "true", "yes"):
-        overrides["include_stream_options"] = False
+    loop_opt = os.environ.get("RUBIKBENCH_LOOP_DETECTION", "").lower()
+    no_loop_opt = os.environ.get("RUBIKBENCH_NO_LOOP_DETECTION", "").lower()
+    if loop_opt in ("1", "true", "yes"):
+        overrides["loop_detection"] = True
+    elif no_loop_opt in ("1", "true", "yes"):
+        overrides["loop_detection"] = False
     return replace(cfg, **overrides)
 
 

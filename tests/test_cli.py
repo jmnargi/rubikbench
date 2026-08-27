@@ -123,8 +123,8 @@ def test_headless_run_cli_args_override_env(mock, tmp_path, capsys, monkeypatch)
     assert server.seen_bodies[0]["max_tokens"] == 128
 
 
-def test_cli_no_stream_options_flag(mock, tmp_path, capsys, monkeypatch):
-    """--no-stream-options removes stream_options from the request body."""
+def test_cli_sampling_and_watchdog_flags(mock, tmp_path, capsys, monkeypatch):
+    """top_p/repetition_penalty/top_k/stream-idle-timeout reach the request body."""
     server, url = mock
     monkeypatch.setenv("RUBIKBENCH_MODEL", "mock")
     out = tmp_path / "out.jsonl"
@@ -134,12 +134,19 @@ def test_cli_no_stream_options_flag(mock, tmp_path, capsys, monkeypatch):
         "--api-key", "k",
         "--model", "mock",
         "-n", "1",
-        "--no-stream-options",
+        "--top-p", "0.9",
+        "--repetition-penalty", "1.1",
+        "--top-k", "40",
+        "--stream-idle-timeout", "60",
         "-o", str(out),
         "--no-color",
     ])
     assert code == 0
-    assert "stream_options" not in server.seen_bodies[0]
+    body = server.seen_bodies[0]
+    assert body["top_p"] == 0.9
+    assert body["repetition_penalty"] == 1.1
+    assert body["top_k"] == 40
+    assert body["stream_options"] == {"include_usage": True}
 
 
 def test_bare_command_runs_from_env(mock, tmp_path, capsys, monkeypatch):

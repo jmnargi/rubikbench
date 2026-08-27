@@ -213,6 +213,11 @@ model; everything else is optional. All supported `.env` variables:
 | `RUBIKBENCH_MAX_INPUT_TOKENS` | Context cap; older turns are trimmed to fit. |
 | `RUBIKBENCH_MAX_OUTPUT_TOKENS` | Sent as `max_tokens` in the request. |
 | `RUBIKBENCH_TEMPERATURE` | Sampling temperature (blank = model default). |
+| `RUBIKBENCH_TOP_P` | Nucleus sampling `top_p` (blank = model default). |
+| `RUBIKBENCH_REPETITION_PENALTY` | vLLM-style repetition penalty (blank = off). |
+| `RUBIKBENCH_TOP_K` | vLLM-style top-k sampling (blank = off). |
+| `RUBIKBENCH_STREAM_IDLE_TIMEOUT` | Abort and retry a request if no chunk arrives for this many seconds (blank = disabled). |
+| `RUBIKBENCH_LOOP_DETECTION` | `1`/`true` to keep loop detection on (default), `0`/`false` to disable. |
 | `RUBIKBENCH_TIMEOUT` | Request timeout in seconds. |
 | `RUBIKBENCH_MAX_RETRIES` | Retries per request. |
 | `RUBIKBENCH_SOLVES` | Number of solves. |

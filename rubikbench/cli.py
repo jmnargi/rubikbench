@@ -42,21 +42,25 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", type=str, default=None, help="model name (overrides RUBIKBENCH_MODEL)")
     parser.add_argument("--max-input-tokens", type=int, default=None, help="context cap (overrides RUBIKBENCH_MAX_INPUT_TOKENS)")
     parser.add_argument("--max-output-tokens", type=int, default=None, help="sent as max_tokens (overrides RUBIKBENCH_MAX_OUTPUT_TOKENS)")
+    parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (overrides RUBIKBENCH_TEMPERATURE)")
+    parser.add_argument("--top-p", type=float, default=None, help="nucleus sampling top_p (overrides RUBIKBENCH_TOP_P)")
+    parser.add_argument("--repetition-penalty", type=float, default=None, help="repetition penalty (overrides RUBIKBENCH_REPETITION_PENALTY)")
+    parser.add_argument("--top-k", type=int, default=None, help="top-k sampling (overrides RUBIKBENCH_TOP_K)")
+    parser.add_argument("--stream-idle-timeout", type=float, default=None, help="abort+retry if no chunk for this many seconds (overrides RUBIKBENCH_STREAM_IDLE_TIMEOUT)")
     parser.add_argument(
-        "--stream-options",
-        dest="stream_options",
+        "--loop-detection",
+        dest="loop_detection",
         action="store_true",
         default=None,
-        help="force stream_options.include_usage on (default: auto; on for OpenAI only)",
+        help="abort+retry when model output loops (default: on)",
     )
     parser.add_argument(
-        "--no-stream-options",
-        dest="stream_options",
+        "--no-loop-detection",
+        dest="loop_detection",
         action="store_false",
         default=None,
-        help="force stream_options.include_usage off (use if your proxy buffers the stream)",
+        help="disable loop detection",
     )
-    parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (overrides RUBIKBENCH_TEMPERATURE)")
     parser.add_argument("--timeout", type=float, default=None, help="request timeout in seconds (overrides RUBIKBENCH_TIMEOUT)")
     parser.add_argument("--max-retries", type=int, default=None, help="retries per request (overrides RUBIKBENCH_MAX_RETRIES)")
     # Benchmark knobs.
@@ -141,6 +145,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         "max_input_tokens": args.max_input_tokens,
         "max_output_tokens": args.max_output_tokens,
         "temperature": args.temperature,
+        "top_p": args.top_p,
+        "repetition_penalty": args.repetition_penalty,
+        "top_k": args.top_k,
+        "stream_idle_timeout": args.stream_idle_timeout,
         "timeout": args.timeout,
         "max_retries": args.max_retries,
         "num_solves": args.solves,
@@ -149,8 +157,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "seed": args.seed,
     }
     overrides = {k: v for k, v in cli_overrides.items() if v is not None}
-    if args.stream_options is not None:
-        overrides["include_stream_options"] = args.stream_options
+    if args.loop_detection is not None:
+        overrides["loop_detection"] = args.loop_detection
     if overrides:
         cfg = replace(cfg, **overrides)
         try:
@@ -178,8 +186,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         # to stderr, so a slow model never looks hung.
         stream=True,
         temperature=cfg.temperature,
+        top_p=cfg.top_p,
         max_output_tokens=cfg.max_output_tokens,
-        include_stream_options=cfg.include_stream_options,
+        stream_idle_timeout=cfg.stream_idle_timeout,
+        loop_detection=cfg.loop_detection,
         extra_body=cfg.effective_extra_body(),
         tool_choice=cfg.tool_choice if cfg.tool_choice != "auto" else "auto",
     )

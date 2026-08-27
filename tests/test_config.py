@@ -58,6 +58,13 @@ def test_effective_extra_body_merges_reasoning_effort():
     cfg2 = BenchmarkConfig(extra_body={"reasoning_effort": "low"}, reasoning_effort="high")
     assert cfg2.effective_extra_body()["reasoning_effort"] == "high"
 
+def test_effective_extra_body_merges_sampling_knobs():
+    cfg = BenchmarkConfig(repetition_penalty=1.1, top_k=40, top_p=0.9)
+    body = cfg.effective_extra_body()
+    assert body == {"repetition_penalty": 1.1, "top_k": 40}
+    # top_p is a standard top-level parameter, not extra_body
+    assert "top_p" not in body
+
 
 @pytest.mark.parametrize(
     "mutate,message",
@@ -71,6 +78,11 @@ def test_effective_extra_body_merges_reasoning_effort():
         (lambda c: setattr(c, "par_strategy", "nonsense"), "par_strategy"),
         (lambda c: setattr(c, "seed", -3), "seed"),
         (lambda c: setattr(c, "extra_body", [1, 2]), "extra_body"),
+        (lambda c: setattr(c, "top_p", 0.0), "top_p"),
+        (lambda c: setattr(c, "top_p", 1.5), "top_p"),
+        (lambda c: setattr(c, "top_k", 0), "top_k"),
+        (lambda c: setattr(c, "repetition_penalty", 0), "repetition_penalty"),
+        (lambda c: setattr(c, "stream_idle_timeout", -1), "stream_idle_timeout"),
     ],
 )
 def test_validation_errors(mutate, message):
@@ -232,11 +244,11 @@ def test_config_from_env_bad_knob(monkeypatch):
         config_from_env()
 
 
-def test_no_stream_options_env_override(monkeypatch):
-    monkeypatch.setenv("RUBIKBENCH_NO_STREAM_OPTIONS", "1")
+def test_loop_detection_env_override(monkeypatch):
+    monkeypatch.setenv("RUBIKBENCH_NO_LOOP_DETECTION", "1")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     cfg = config_from_env()
-    assert cfg.include_stream_options is False
+    assert cfg.loop_detection is False
 
 
 def test_apply_env_overrides_preset_key_wins_over_file(monkeypatch):

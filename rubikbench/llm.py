@@ -10,6 +10,7 @@ surface as plain JSON body fields.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -74,8 +75,10 @@ class OpenAICompatibleClient:
         max_retries: int = 0,
         stream: bool = False,
         temperature: float | None = None,
+        top_p: float | None = None,
         max_output_tokens: int | None = None,
-        include_stream_options: bool | None = None,
+        stream_idle_timeout: float | None = None,
+        loop_detection: bool = True,
         extra_body: dict[str, Any] | None = None,
         tool_choice: str = "auto",
     ) -> None:
@@ -85,8 +88,10 @@ class OpenAICompatibleClient:
         self._model = model
         self._stream = stream
         self._temperature = temperature
+        self._top_p = top_p
         self._max_output_tokens = max_output_tokens
-        self._include_stream_options = include_stream_options
+        self._stream_idle_timeout = stream_idle_timeout
+        self._loop_detection = loop_detection
         self._extra_body = dict(extra_body or {})
         self._tool_choice = tool_choice
         # The SDK must not retry internally: retries with backoff are owned by
@@ -116,21 +121,19 @@ class OpenAICompatibleClient:
             kwargs["tool_choice"] = self._tool_choice
         if self._temperature is not None:
             kwargs["temperature"] = self._temperature
+        if self._top_p is not None:
+            kwargs["top_p"] = self._top_p
         if self._max_output_tokens:
-            # Standard OpenAI-compatible parameter; LiteLLM proxies and vLLM
-            # accept ``max_tokens`` at the top level (not inside extra_body).
+            # Standard OpenAI-compatible parameter; passed top-level (not
+            # inside extra_body) so vLLM/SGLang and OpenAI both accept it.
             kwargs["max_tokens"] = self._max_output_tokens
         if self._stream:
             # Avoid HTTP/gateway buffering of SSE responses.
             kwargs["extra_headers"] = {"Cache-Control": "no-cache"}
-            # By default only OpenAI's own endpoint is known to handle
-            # stream_options without buffering custom LiteLLM proxies. Everywhere
-            # else we leave it off unless explicitly enabled.
-            use_stream_options = self._include_stream_options
-            if use_stream_options is None:
-                use_stream_options = "api.openai.com" in (self._base_url or "")
-            if use_stream_options:
-                kwargs.setdefault("stream_options", {"include_usage": True})
+            # OpenAI v1 chat completions: request per-stream usage so token
+            # counts (prompt/completion/cached/reasoning) arrive in the final
+            # chunk. Every OpenAI-compatible server MUST support this.
+            kwargs["stream_options"] = {"include_usage": True}
 
         started = time.monotonic()
         self._request_started = started
@@ -140,6 +143,8 @@ class OpenAICompatibleClient:
             else:
                 response = self._client.chat.completions.create(**kwargs)
                 turn = self._parse_response(response)
+        except LLMError:
+            raise
         except (APIError, APIConnectionError, APITimeoutError, AuthenticationError, RateLimitError) as exc:
             raise LLMError(_describe_api_error(exc)) from exc
         except Exception as exc:
@@ -158,8 +163,6 @@ class OpenAICompatibleClient:
             details = getattr(usage, "prompt_tokens_details", None)
             if details is not None:
                 cached = getattr(details, "cached_tokens", 0) or 0
-            else:
-                cached = getattr(usage, "cache_read_input_tokens", 0) or 0  # Anthropic style
             completion_details = getattr(usage, "completion_tokens_details", None)
             if completion_details is not None:
                 reasoning = getattr(completion_details, "reasoning_tokens", 0) or 0
@@ -174,89 +177,135 @@ class OpenAICompatibleClient:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         slots: dict[int, dict[str, str]] = {}
-        prompt_tokens = completion_tokens = cached_tokens = total_tokens = 0
+        prompt_tokens = completion_tokens = reasoning_tokens = cached_tokens = total_tokens = 0
         finish_reason: str | None = None
         ttft = 0.0
         order: list[int] = []
         seen_payload = False
         stream = self._client.chat.completions.create(stream=True, **kwargs)
-        for chunk in stream:
-            (
-                prompt_tokens,
-                completion_tokens,
-                reasoning_tokens,
-                cached_tokens,
-                total_tokens,
-            ) = self._usage_fields(getattr(chunk, "usage", None) or None)
-            delta_content: str | None = None
-            delta_reasoning: str | None = None
-            tool_deltas_out: list[dict[str, Any]] = []
-            delta_finish: str | None = None
-            for choice in getattr(chunk, "choices", []) or []:
-                reason = getattr(choice, "finish_reason", None)
-                if reason:
-                    finish_reason = reason
-                    delta_finish = reason
-                delta = getattr(choice, "delta", None)
-                if delta is None:
-                    continue
-                content = getattr(delta, "content", None)
-                if content:
-                    content_parts.append(content)
-                    delta_content = content
-                # Reasoning models (DeepSeek, OpenRouter, Gemini via proxies)
-                # emit the chain of thought under various field names.
-                reasoning = None
-                for attr in ("reasoning_content", "reasoning", "thinking"):
-                    value = getattr(delta, attr, None)
-                    if value:
-                        reasoning = value
-                        break
-                if reasoning:
-                    reasoning_parts.append(reasoning)
-                    delta_reasoning = reasoning
-                tool_deltas = getattr(delta, "tool_calls", None) or []
-                if (content or reasoning or tool_deltas) and not seen_payload:
-                    seen_payload = True
-                    ttft = time.monotonic() - self._request_started
-                for tc in tool_deltas:
-                    idx = getattr(tc, "index", 0)
-                    slot = slots.get(idx)
-                    if slot is None:
-                        slot = slots[idx] = {"id": "", "name": "", "args": ""}
-                        order.append(idx)
-                    tc_id = getattr(tc, "id", None)
-                    if tc_id:
-                        slot["id"] = tc_id
-                    fn = getattr(tc, "function", None)
-                    frag_name = frag_args = None
-                    if fn is not None:
-                        name = getattr(fn, "name", None)
-                        if name:
-                            slot["name"] += name
-                            frag_name = name
-                        args = getattr(fn, "arguments", None)
-                        if args:
-                            slot["args"] += args
-                            frag_args = args
-                    tool_deltas_out.append(
-                        {"index": idx, "id": tc_id, "name": frag_name, "arguments": frag_args}
-                    )
-            if on_chunk is not None:
-                on_chunk({
-                    "content": delta_content,
-                    "reasoning": delta_reasoning,
-                    "tool_calls": tool_deltas_out or None,
-                    "usage": {
-                        "prompt": prompt_tokens,
-                        "completion": completion_tokens,
-                        "reasoning": reasoning_tokens,
-                        "cached": cached_tokens,
-                        "total": total_tokens,
-                    },
-                    "finish_reason": delta_finish,
-                    "ttft": ttft if seen_payload else None,
-                })
+
+        # Watchdog. A daemon thread closes the response when no meaningful chunk
+        # has arrived for ``stream_idle_timeout`` seconds, aborting the blocking
+        # iteration below with a retryable error. Loop detection runs inline on
+        # the accumulated output and aborts on tight, sustained repetition.
+        idle_timeout = self._stream_idle_timeout
+        stop = threading.Event()
+        fired: dict[str, str | None] = {"reason": None}
+        last_activity = time.monotonic()
+        activity_lock = threading.Lock()
+        if idle_timeout is not None and idle_timeout > 0:
+            def _watchdog() -> None:
+                while not stop.is_set():
+                    stop.wait(0.25)
+                    with activity_lock:
+                        idle_for = time.monotonic() - last_activity
+                    if idle_for > idle_timeout:
+                        fired["reason"] = f"no output for {idle_for:.0f}s (idle timeout {idle_timeout:.0f}s)"
+                        stream.close()
+                        return
+
+            threading.Thread(target=_watchdog, daemon=True, name="rubikbench-watchdog").start()
+
+        try:
+            for chunk in stream:
+                (
+                    prompt_tokens,
+                    completion_tokens,
+                    reasoning_tokens,
+                    cached_tokens,
+                    total_tokens,
+                ) = self._usage_fields(getattr(chunk, "usage", None) or None)
+                delta_content: str | None = None
+                delta_reasoning: str | None = None
+                tool_deltas_out: list[dict[str, Any]] = []
+                delta_finish: str | None = None
+                for choice in getattr(chunk, "choices", []) or []:
+                    reason = getattr(choice, "finish_reason", None)
+                    if reason:
+                        finish_reason = reason
+                        delta_finish = reason
+                    delta = getattr(choice, "delta", None)
+                    if delta is None:
+                        continue
+                    content = getattr(delta, "content", None)
+                    if content:
+                        content_parts.append(content)
+                        delta_content = content
+                    # Reasoning models (DeepSeek-R1, QwQ, o-series) stream the
+                    # chain of thought under ``reasoning_content`` (vLLM/SGLang)
+                    # or ``reasoning``.
+                    reasoning = None
+                    for attr in ("reasoning_content", "reasoning"):
+                        value = getattr(delta, attr, None)
+                        if value:
+                            reasoning = value
+                            break
+                    if reasoning:
+                        reasoning_parts.append(reasoning)
+                        delta_reasoning = reasoning
+                    tool_deltas = getattr(delta, "tool_calls", None) or []
+                    if (content or reasoning or tool_deltas) and not seen_payload:
+                        seen_payload = True
+                        ttft = time.monotonic() - self._request_started
+                    for tc in tool_deltas:
+                        idx = getattr(tc, "index", 0)
+                        slot = slots.get(idx)
+                        if slot is None:
+                            slot = slots[idx] = {"id": "", "name": "", "args": ""}
+                            order.append(idx)
+                        tc_id = getattr(tc, "id", None)
+                        if tc_id:
+                            slot["id"] = tc_id
+                        fn = getattr(tc, "function", None)
+                        frag_name = frag_args = None
+                        if fn is not None:
+                            name = getattr(fn, "name", None)
+                            if name:
+                                slot["name"] += name
+                                frag_name = name
+                            args = getattr(fn, "arguments", None)
+                            if args:
+                                slot["args"] += args
+                                frag_args = args
+                        tool_deltas_out.append(
+                            {"index": idx, "id": tc_id, "name": frag_name, "arguments": frag_args}
+                        )
+
+                if delta_content or delta_reasoning or tool_deltas_out or prompt_tokens or completion_tokens or cached_tokens or total_tokens:
+                    with activity_lock:
+                        last_activity = time.monotonic()
+
+                if self._loop_detection and self._is_looping(
+                    "".join(reasoning_parts) + "".join(content_parts)
+                ):
+                    stream.close()
+                    raise LLMError("watchdog: model output is looping; aborted stream")
+
+                if on_chunk is not None:
+                    on_chunk({
+                        "content": delta_content,
+                        "reasoning": delta_reasoning,
+                        "tool_calls": tool_deltas_out or None,
+                        "usage": {
+                            "prompt": prompt_tokens,
+                            "completion": completion_tokens,
+                            "reasoning": reasoning_tokens,
+                            "cached": cached_tokens,
+                            "total": total_tokens,
+                        },
+                        "finish_reason": delta_finish,
+                        "ttft": ttft if seen_payload else None,
+                    })
+        except LLMError:
+            raise
+        except Exception as exc:
+            reason = fired["reason"]
+            if reason:
+                raise LLMError(f"watchdog: {reason}") from exc
+            raise
+        finally:
+            stop.set()
+
         tool_calls: list[ToolCall] = []
         for idx in order:
             slot = slots[idx]
@@ -281,6 +330,25 @@ class OpenAICompatibleClient:
             ttft=ttft,
         )
 
+    @staticmethod
+    def _is_looping(text: str, max_repeats: int = 6, min_cycle: int = 2, max_cycle: int = 24) -> bool:
+        """True when the tail of ``text`` repeats a short pattern ``max_repeats`` times.
+
+        Whitespace is ignored so move lists like ``R U R U R U …`` (which arrive
+        with a trailing separator that breaks exact-prefix matching) are caught.
+        """
+        compact = "".join(text.split())
+        for cycle_len in range(min_cycle, max_cycle + 1):
+            need = cycle_len * max_repeats
+            if len(compact) < need:
+                continue
+            pattern = compact[-cycle_len:]
+            if not pattern:
+                continue
+            if compact[-need:] == pattern * max_repeats:
+                return True
+        return False
+
     def _parse_response(self, response: Any) -> AssistantTurn:
         choices = getattr(response, "choices", None) or []
         choice = choices[0] if choices else None
@@ -288,7 +356,7 @@ class OpenAICompatibleClient:
         content = getattr(message, "content", None) if message is not None else None
         reasoning = None
         if message is not None:
-            for attr in ("reasoning_content", "reasoning", "thinking"):
+            for attr in ("reasoning_content", "reasoning"):
                 value = getattr(message, attr, None)
                 if value:
                     reasoning = value
