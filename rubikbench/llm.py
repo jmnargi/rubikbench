@@ -143,6 +143,13 @@ class OpenAICompatibleClient:
             else:
                 response = self._client.chat.completions.create(**kwargs)
                 turn = self._parse_response(response)
+                # Loop detection is not streaming-only: a non-streaming answer
+                # that repeats a short pattern is equally stuck. Raising here
+                # lets the benchmark turn loop retry, exactly as with streams.
+                if self._loop_detection and self._is_looping(
+                    (turn.reasoning or "") + (turn.content or "")
+                ):
+                    raise LLMError("watchdog: model output is looping; aborted answer")
         except LLMError:
             raise
         except (APIError, APIConnectionError, APITimeoutError, AuthenticationError, RateLimitError) as exc:

@@ -45,6 +45,12 @@ def _emit(emitter: Emitter | None, kind: str, **payload: Any) -> None:
             pass
 
 
+
+#: Consecutive turns with the exact same single tool call (same name and
+#: arguments) before the solve is declared a loop. The tool result for such a
+#: call is deterministic per cube state, so repeating it cannot make progress.
+REPEATED_CALL_LIMIT = 3
+
 # --------------------------------------------------------------------------- tools
 
 class SolveContext:
@@ -284,6 +290,10 @@ def run_solve(
     text_actions_total = 0
     reasoning_tokens = estimated_reasoning_tokens = estimated_cacheable_tokens = 0
     turns = 0
+    # Cross-turn watchdog state: the most recent single tool call and how many
+    # consecutive turns it has been repeated.
+    prev_call_sig: tuple[str, str] | None = None
+    repeated_calls = 0
     tool_calls_total = 0
     prompt_tokens = 0
     completion_tokens = 0
@@ -407,6 +417,31 @@ def run_solve(
                 }
                 for tc in turn.tool_calls
             ]
+
+        # Watchdog: the same single tool call repeated back-to-back with the
+        # same arguments yields the same tool result every time; three in a
+        # row means the model is not reading its results. Abort instead of
+        # burning the turn budget on the same loop.
+        if cfg.loop_detection:
+            sig: tuple[str, str] | None = None
+            if len(turn.tool_calls) == 1:
+                tc = turn.tool_calls[0]
+                try:
+                    sig = (tc.name, json.dumps(tc.arguments, sort_keys=True, default=str))
+                except (TypeError, ValueError):
+                    sig = (tc.name, repr(tc.arguments))
+            if sig is not None and sig == prev_call_sig:
+                repeated_calls += 1
+            else:
+                repeated_calls = 1 if sig is not None else 0
+            prev_call_sig = sig
+            if repeated_calls >= REPEATED_CALL_LIMIT:
+                message = (
+                    f"watchdog: repeated the same tool call {REPEATED_CALL_LIMIT} times; aborted solve"
+                )
+                _emit(emitter, "log", index=index, level="error", message=message)
+                error = message
+                break
         messages.append(assistant_msg)
 
         if turn.tool_calls:

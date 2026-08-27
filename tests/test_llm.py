@@ -19,7 +19,7 @@ from rubikbench.benchmark import (
     run_solve,
 )
 from rubikbench.config import BenchmarkConfig
-from rubikbench.llm import AssistantTurn, LLMError, OpenAICompatibleClient
+from rubikbench.llm import AssistantTurn, LLMError, OpenAICompatibleClient, ToolCall
 from rubikbench.scramble import scramble_to_string
 
 
@@ -170,6 +170,15 @@ def test_loop_detection_aborts_looping_stream(mock):
     server, url = mock
     server.agent = lambda body: {"content": "R U R U R U R U R U R U", "finish_reason": "stop"}
     client = make_client(url, stream=True)
+    with pytest.raises(LLMError, match="looping"):
+        client.complete([{"role": "user", "content": "Scramble (2 moves): R U"}], [])
+
+
+def test_loop_detection_aborts_looping_non_streaming(mock):
+    """Loop detection must also guard non-streaming completions (the default)."""
+    server, url = mock
+    server.agent = lambda body: {"content": "R U R U R U R U R U R U", "finish_reason": "stop"}
+    client = make_client(url)  # stream=False is the default
     with pytest.raises(LLMError, match="looping"):
         client.complete([{"role": "user", "content": "Scramble (2 moves): R U"}], [])
 
@@ -445,6 +454,38 @@ class FixedContentClient:
 
     def complete(self, messages, tools, extra_body, on_chunk=None):
         return AssistantTurn(content=self.content)
+
+
+
+class RepeatingCallClient:
+    """A stuck model: returns the same single tool call on every turn."""
+
+    def __init__(self, name: str = "apply_moves", arguments: dict | None = None):
+        self.name = name
+        self.arguments = arguments if arguments is not None else {"moves": "R"}
+
+    def complete(self, messages, tools, extra_body, on_chunk=None):
+        return AssistantTurn(
+            content=None,
+            tool_calls=[ToolCall(id="call_1", name=self.name, arguments=dict(self.arguments))],
+        )
+
+
+def test_repeated_identical_tool_call_aborts_solve():
+    """The cross-turn watchdog stops a model stuck on one tool call."""
+    cfg = base_cfg(max_turns=10)
+    result = run_solve(0, ["R", "U"], cfg, RepeatingCallClient())
+    assert result.error and "watchdog" in result.error
+    assert result.turns == 3
+    assert result.tool_calls == 2  # the third identical call was never executed
+
+
+def test_repeated_tool_call_watchdog_can_be_disabled():
+    cfg = base_cfg(max_turns=4, loop_detection=False)
+    result = run_solve(0, ["R", "U"], cfg, RepeatingCallClient())
+    assert result.error is None
+    assert result.turns == 4
+    assert result.tool_calls == 4
 
 
 class TextSolverClient:
