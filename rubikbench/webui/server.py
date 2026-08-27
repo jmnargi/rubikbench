@@ -22,8 +22,9 @@ DEFAULT_PORT = 8321
 def build_replay_document(run_path: str | Path) -> str:
     """Render the full HTML page with the run dataset embedded."""
     dataset = aggregate_files([run_path])
+    # JSON in an executable script must never contain an HTML end-tag delimiter.
+    payload = json.dumps(dataset).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    payload = json.dumps(dataset)
     if "/*__RUN_DATA__*/" not in index:
         raise RuntimeError("webui template is missing the run-data marker")
     return index.replace("/*__RUN_DATA__*/", payload)

@@ -22,6 +22,7 @@ from .config import (
     api_key_from_env,
     api_key_source,
     apply_env_overrides,
+    apply_profile,
     config_from_env,
     load_config,
     load_env,
@@ -40,6 +41,18 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-url", type=str, default=None, help="endpoint URL (overrides RUBIKBENCH_BASE_URL)")
     parser.add_argument("--api-key", type=str, default=None, help="API key (overrides .env)")
     parser.add_argument("--model", type=str, default=None, help="model name (overrides RUBIKBENCH_MODEL)")
+    parser.add_argument("--profile", choices=("smoke", "diagnostic", "full", "research"), default=None,
+                        help="apply named run defaults before explicit CLI flags")
+    parser.add_argument("--context-window-tokens", type=int, default=None,
+                        help="total context window; input is budgeted after output reserve")
+    parser.add_argument("--output-token-reserve", type=int, default=None,
+                        help="tokens reserved for output while budgeting input")
+    parser.add_argument("--protocol-mode", choices=("tool_only", "text_compat"), default=None,
+                        help="move protocol (tool_only is the benchmark default)")
+    parser.add_argument("--presentation-mode", choices=("stickers-v1", "cubie-v1"), default=None,
+                        help="cube-state presentation schema")
+    parser.add_argument("--scramble-preset", type=str, default=None,
+                        help="premade benchmark set, including versioned ladder fixtures")
     parser.add_argument("--max-input-tokens", type=int, default=None, help="context cap (overrides RUBIKBENCH_MAX_INPUT_TOKENS)")
     parser.add_argument("--max-output-tokens", type=int, default=None, help="sent as max_tokens (overrides RUBIKBENCH_MAX_OUTPUT_TOKENS)")
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (overrides RUBIKBENCH_TEMPERATURE)")
@@ -137,11 +150,19 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"error: invalid config: {exc}", file=sys.stderr)
         return 2
 
+    if args.profile is not None:
+        cfg = apply_profile(cfg, args.profile)
+
     # CLI flags win over everything; only explicitly given flags are applied.
     cli_overrides = {
         "base_url": args.base_url,
         "api_key": args.api_key,
         "model": args.model,
+        "context_window_tokens": args.context_window_tokens,
+        "output_token_reserve": args.output_token_reserve,
+        "protocol_mode": args.protocol_mode,
+        "presentation_mode": args.presentation_mode,
+        "scramble_preset": args.scramble_preset,
         "max_input_tokens": args.max_input_tokens,
         "max_output_tokens": args.max_output_tokens,
         "temperature": args.temperature,

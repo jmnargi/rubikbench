@@ -38,19 +38,38 @@ def read_run(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return header, solves
 
 
+def capability_frontier(solves: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    """Per-difficulty solve rate and move efficiency for ladder result records."""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for solve in solves:
+        label = str(solve.get("difficulty") or solve.get("scramble_preset") or "random")
+        groups.setdefault(label, []).append(solve)
+    frontier: dict[str, dict[str, float | int]] = {}
+    for label, group in groups.items():
+        won = [s for s in group if s.get("solved")]
+        frontier[label] = {
+            "solves": len(group), "solve_rate": round(len(won) / len(group), 3),
+            "efficiency": round(sum((s.get("par") or 0) / max(1, s.get("total_moves", 0)) for s in won)
+                                / len(won), 3) if won else 0.0,
+        }
+    return frontier
+
+
 def aggregate_files(paths: list[str | Path]) -> dict[str, Any]:
     """Merge run files into one dataset document."""
     runs: list[dict[str, Any]] = []
     solves: list[dict[str, Any]] = []
     for path in paths:
         header, run_solves = read_run(path)
+        config = dict(header.get("config", {}))
+        config.pop("api_key", None)
         runs.append({
             "file": str(path),
             "started_at": header.get("started_at"),
             "duration": header.get("duration"),
-            "model": header.get("config", {}).get("model"),
-            "base_url": header.get("config", {}).get("base_url"),
-            "config": header.get("config", {}),
+            "model": config.get("model"),
+            "base_url": config.get("base_url"),
+            "config": config,
             "aggregates": header.get("aggregates", {}),
         })
         for record in run_solves:
@@ -89,6 +108,7 @@ def aggregate_files(paths: list[str | Path]) -> dict[str, Any]:
             "moves": total("total_moves"),
             "retries": total("retries"),
             "truncated": sum(1 for s in solves if s.get("truncated")),
+            "frontier": capability_frontier(solves),
         },
         "runs_detail": runs,
         "solves": solves,

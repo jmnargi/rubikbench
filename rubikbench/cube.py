@@ -125,8 +125,8 @@ def _compose(a: tuple[int, ...], b: tuple[int, ...]) -> tuple[int, ...]:
 def _build_moves() -> dict[str, tuple[int, ...]]:
     moves: dict[str, tuple[int, ...]] = {}
     for face in FACES:
-        cw = _build_perm(face, -90.0)   # clockwise when viewed at the face
-        ccw = _build_perm(face, 90.0)
+        cw = _build_perm(face, 90.0)    # clockwise when viewed at the face
+        ccw = _build_perm(face, -90.0)
         double = _compose(cw, cw)
         moves[face] = cw
         moves[face + "'"] = ccw
@@ -161,6 +161,22 @@ def parse_moves(text: str) -> tuple[list[str], list[str]]:
 
 def moves_to_string(moves: list[str]) -> str:
     return " ".join(moves)
+
+# Kociemba's position order and facelet indices.  Piece identities are their
+# solved color names; orientation is the standard cubie orientation at the
+# current position.
+_CORNER_NAMES = ("URF", "UFL", "ULB", "UBR", "DFR", "DLF", "DBL", "DRB")
+_CORNER_FACELETS = (
+    (8, 9, 20), (6, 18, 38), (0, 36, 47), (2, 45, 11),
+    (29, 26, 15), (27, 44, 24), (33, 53, 42), (35, 17, 51),
+)
+_CORNER_COLORS = tuple(tuple(name) for name in _CORNER_NAMES)
+_EDGE_NAMES = ("UR", "UF", "UL", "UB", "DR", "DF", "DL", "DB", "FR", "FL", "BL", "BR")
+_EDGE_FACELETS = (
+    (5, 10), (7, 19), (3, 37), (1, 46), (32, 16), (28, 25),
+    (30, 43), (34, 52), (23, 12), (21, 41), (50, 39), (48, 14),
+)
+_EDGE_COLORS = tuple(tuple(name) for name in _EDGE_NAMES)
 
 SOLVED_FACELETS = list("".join(f * 9 for f in FACES))
 
@@ -212,3 +228,47 @@ class Cube:
     def copy(self) -> Cube:
         c = Cube(list(self.facelets), list(self.history), list(self.scramble))
         return c
+
+    def cubie_state(self) -> dict[str, object]:
+        """Derived Kociemba-style cubie inventory for this facelet state."""
+        corners: list[dict[str, object]] = []
+        for position, indices in zip(_CORNER_NAMES, _CORNER_FACELETS, strict=True):
+            colors = tuple(self.facelets[index] for index in indices)
+            orientation = next(i for i, color in enumerate(colors) if color in "UD")
+            identity = next(
+                "".join(piece)
+                for piece in _CORNER_COLORS
+                if piece[1] == colors[(orientation + 1) % 3]
+                and piece[2] == colors[(orientation + 2) % 3]
+            )
+            corners.append(
+                {"position": position, "piece": identity, "orientation": orientation}
+            )
+
+        edges: list[dict[str, object]] = []
+        for position, indices in zip(_EDGE_NAMES, _EDGE_FACELETS, strict=True):
+            colors = tuple(self.facelets[index] for index in indices)
+            identity = orientation = None
+            for candidate, piece in zip(_EDGE_NAMES, _EDGE_COLORS, strict=True):
+                if colors == piece:
+                    identity, orientation = candidate, 0
+                    break
+                if colors == (piece[1], piece[0]):
+                    identity, orientation = candidate, 1
+                    break
+            if identity is None:
+                raise ValueError("facelets do not describe a legal edge cubie")
+            edges.append(
+                {"position": position, "piece": identity, "orientation": orientation}
+            )
+        return {
+            "version": "cubie-v1",
+            "orientation_convention": (
+                "Corners: orientation is the index (0, 1, 2) of the U/D sticker "
+                "in the listed position order. Edges: 0 preserves the piece-name "
+                "color order and 1 reverses it."
+            ),
+            "legal": True,
+            "corners": corners,
+            "edges": edges,
+        }

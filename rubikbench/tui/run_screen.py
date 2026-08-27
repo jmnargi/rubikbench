@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
-from rich.markup import escape
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -28,6 +28,7 @@ from ..config import BenchmarkConfig, api_key_from_env
 from ..llm import OpenAICompatibleClient
 from .messages import (
     BenchFinishedMsg,
+    ContextMsg,
     LogMsg,
     SolveDoneMsg,
     SolveStartedMsg,
@@ -71,7 +72,7 @@ class RunScreen(Screen):
 
         # Completed LLM-output history as (kind, text). Kinds:
         # divider / reasoning / content / tool / result / log.
-        self._history: list[tuple[str, str]] = []
+        self._history: list[tuple[str, str | Text]] = []
         self._show_reasoning = True
 
         # In-flight streaming state.
@@ -80,6 +81,10 @@ class RunScreen(Screen):
         self._live_reasoning = ""
         self._live_tool_slots: dict[int, dict[str, str]] = {}
         self._live_ttft: float | None = None
+        # Realtime rate bookkeeping: when the current stream began and how many
+        # output characters have arrived (the API only reports usage at the end).
+        self._live_stream_started = 0.0
+        self._live_chars = 0
 
         # Request-in-flight state (shown while waiting for the first chunk).
         self._waiting_turn: int | None = None
@@ -95,6 +100,8 @@ class RunScreen(Screen):
         self._tok_cached = 0
         self._tok_total = 0
         self._usage_by_turn: dict[int, dict[str, int]] = {}
+        # Latest provider-reported completion tokens, shown against the output cap.
+        self._last_output_use: int | None = None
 
         self._solve_started = time.monotonic()
         self._stats_timer = None
@@ -123,8 +130,12 @@ class RunScreen(Screen):
                         yield Label(f"{self.config.num_solves}", id="info-solves")
                         yield Label("max turns:", classes="info-label")
                         yield Label(f"{self.config.max_turns}", id="info-turns")
-                        yield Label("max tokens:", classes="info-label")
+                        yield Label("output cap:", classes="info-label")
                         yield Label(f"{self.config.max_output_tokens:,}" if self.config.max_output_tokens else "—", id="info-tokens")
+                        yield Label("protocol / view:", classes="info-label")
+                        yield Label(f"{self.config.protocol_mode} / {self.config.presentation_mode}", id="info-protocol")
+                        yield Label("context / trim:", classes="info-label")
+                        yield Label("—", id="info-context")
                         yield Label("temperature:", classes="info-label")
                         yield Label(str(self.config.temperature if self.config.temperature is not None else "—"), id="info-temp")
                 with Vertical(classes="card"):
@@ -132,17 +143,21 @@ class RunScreen(Screen):
                     with Grid(id="stats-grid"):
                         yield Label("Turns")
                         yield Label("—", id="st-turns")
-                        yield Label("Tool calls")
+                        yield Label("Tools")
                         yield Label("—", id="st-tools")
+                        yield Label("Text actions")
+                        yield Label("—", id="st-text")
                         yield Label("Moves")
                         yield Label("—", id="st-moves")
                         yield Label("Tokens in")
                         yield Label("0", id="st-tok-in")
                         yield Label("Tokens out")
                         yield Label("0", id="st-tok-out")
-                        yield Label("Reasoning")
+                        yield Label("Output use")
+                        yield Label("—", id="st-out-cap")
+                        yield Label("Reasoning (reported)")
                         yield Label("0", id="st-reasoning")
-                        yield Label("Cached")
+                        yield Label("Cached (reported)")
                         yield Label("0", id="st-tok-cached")
                         yield Label("Elapsed")
                         yield Label("0.0s", id="st-time")
@@ -218,6 +233,7 @@ class RunScreen(Screen):
                 payload.get("reasoning_tokens", 0),
                 payload.get("cached_tokens", 0),
                 payload.get("total_tokens", 0),
+                payload.get("finish_reason"),
             ))
         elif kind == "tool_call":
             self.post_message(ToolCallMsg(payload["turn"], payload["name"], payload["arguments"], payload["action"]))
@@ -225,14 +241,22 @@ class RunScreen(Screen):
             self.post_message(ToolResultMsg(payload["turn"], payload["name"], payload["content"]))
         elif kind == "state":
             p = payload
-            self.post_message(StateMsg(p["facelets"], p["history"], p["total_moves"], p["turns"], p["tool_calls"], p["solved"]))
+            self.post_message(StateMsg(
+                p["facelets"], p["history"], p["total_moves"], p["turns"],
+                p["tool_calls"], p["solved"], p.get("text_actions", 0),
+            ))
+        elif kind == "context":
+            self.post_message(ContextMsg(
+                payload["current"], payload["peak"], payload.get("input_budget"),
+                payload["trim_count"], payload.get("output_cap"),
+            ))
         elif kind == "log":
             self.post_message(LogMsg(payload["message"], payload.get("level", "info")))
         elif kind == "solve_done":
             self.post_message(SolveDoneMsg(payload["result"].index, self.config.num_solves, payload["result"]))
 
     # --------------------------------------------------------------- model pane
-    def _append_history(self, kind: str, text: str) -> None:
+    def _append_history(self, kind: str, text: str | Text) -> None:
         self._history.append((kind, text))
         self._refresh_history()
         self._scroll_model()
@@ -240,43 +264,53 @@ class RunScreen(Screen):
     def _append_log(self, text: str) -> None:
         self._append_history("log", text)
 
-    def _render_entry(self, kind: str, text: str) -> str:
+    def _render_entry(self, kind: str, value: str | Text) -> Text | None:
         if kind == "divider":
-            return f"[dim]── {text} ──[/dim]"
+            return Text(f"── {value} ──", style="dim")
         if kind == "reasoning":
-            return f"[#888888 italic]{escape(text)}[/]" if self._show_reasoning else ""
+            return Text(value, style="#888888 italic") if self._show_reasoning else None
         if kind == "content":
-            return f"[white]{escape(text)}[/]"
+            return Text(value, style="white")
         if kind == "result":
-            return f"[dim]{escape(text)}[/dim]"
-        return text  # tool / log entries already carry markup
+            return Text(value, style="dim")
+        # tool entries are pre-rendered Text; log entries are trusted markup.
+        return value if isinstance(value, Text) else Text.from_markup(value)
 
     def _refresh_history(self) -> None:
-        lines = []
+        rendered = Text()
+        first = True
         for kind, text in self._history:
-            rendered = self._render_entry(kind, text)
-            if rendered:
-                lines.append(rendered)
-        self.query_one("#history-text", Static).update("\n".join(lines))
+            entry = self._render_entry(kind, text)
+            if entry is None:
+                continue
+            if not first:
+                rendered.append("\n")
+            rendered.append_text(entry)
+            first = False
+        self.query_one("#history-text", Static).update(rendered)
 
-    def _render_tool_call(self, name: str, arguments: dict[str, Any] | None, idx: int | None = None) -> str:
+    def _render_tool_call(self, name: str, arguments: dict[str, Any] | None, idx: int | None = None) -> Text:
         if arguments:
             # Show each kwarg as name="value" on one clean line.
             rendered = ", ".join(
-                f"{escape(k)}={escape(json.dumps(v, ensure_ascii=False))}"
+                f"{k}={json.dumps(v, ensure_ascii=False)}"
                 for k, v in arguments.items()
             )
         else:
             rendered = ""
-        prefix = f"tool {idx + 1}: " if idx is not None else ""
-        return f"[bright_black]{prefix}[/bright_black][bold cyan]{escape(name)}[/bold cyan]({rendered})"
+        result = Text()
+        if idx is not None:
+            result.append(f"tool {idx + 1}: ", style="bright_black")
+        result.append(name, style="bold cyan")
+        result.append(f"({rendered})")
+        return result
 
-    def _render_live(self) -> str:
-        parts: list[str] = []
+    def _render_live(self) -> Text:
+        parts: list[Text] = []
         if self._live_reasoning and self._show_reasoning:
-            parts.append(f"[#888888 italic]{escape(self._live_reasoning)}[/]")
+            parts.append(Text(self._live_reasoning, style="#888888 italic"))
         if self._live_content:
-            parts.append(f"[white]{escape(self._live_content)}[/]")
+            parts.append(Text(self._live_content, style="white"))
         for idx in sorted(self._live_tool_slots):
             slot = self._live_tool_slots[idx]
             try:
@@ -284,7 +318,17 @@ class RunScreen(Screen):
             except json.JSONDecodeError:
                 args = {"_unparsed": slot["args"]}
             parts.append(self._render_tool_call(slot["name"] or "…", args, idx))
-        return "\n".join(parts)
+        return self._join_texts(parts)
+
+    @staticmethod
+    def _join_texts(parts: list[Text]) -> Text:
+        """Join rendered segments with newlines into one styled Text."""
+        result = Text()
+        for i, part in enumerate(parts):
+            if i:
+                result.append("\n")
+            result.append_text(part)
+        return result
 
     def _update_live(self) -> None:
         """Render the live pane now (toggles and final flushes use this)."""
@@ -361,6 +405,8 @@ class RunScreen(Screen):
         self._live_reasoning = ""
         self._live_tool_slots = {}
         self._live_ttft = None
+        self._live_stream_started = time.monotonic()
+        self._live_chars = 0
 
     def action_toggle_reasoning(self) -> None:
         self._show_reasoning = not self._show_reasoning
@@ -368,6 +414,13 @@ class RunScreen(Screen):
         self._update_live()
 
     # ---------------------------------------------------------------- handlers
+    @on(ContextMsg)
+    def _on_context(self, msg: ContextMsg) -> None:
+        budget = f"{msg.budget:,}" if msg.budget is not None else "unlimited"
+        self.query_one("#info-context", Label).update(
+            f"{msg.current:,} current / {msg.peak:,} peak of {budget}; trims {msg.trim_count}"
+        )
+
     @on(SolveStartedMsg)
     def _on_solve_started(self, msg: SolveStartedMsg) -> None:
         self._solve_started = time.monotonic()
@@ -376,6 +429,9 @@ class RunScreen(Screen):
         self._live_reasoning = ""
         self._live_tool_slots = {}
         self._waiting_turn = None
+        self._last_output_use = None
+        self.query_one("#st-text", Label).update("0")
+        self.query_one("#st-out-cap", Label).update("—")
         self.query_one("#run-status", Static).update(
             f"Solve {msg.index + 1}/{msg.total} · {msg.scramble}"
         )
@@ -394,8 +450,10 @@ class RunScreen(Screen):
             self._start_live_turn(msg.turn)
         if msg.reasoning:
             self._live_reasoning += msg.reasoning
+            self._live_chars += len(msg.reasoning)
         if msg.content:
             self._live_content += msg.content
+            self._live_chars += len(msg.content)
         for tc in msg.tool_calls or []:
             slot = self._live_tool_slots.setdefault(tc["index"], {"id": "", "name": "", "args": ""})
             if tc.get("id"):
@@ -415,7 +473,10 @@ class RunScreen(Screen):
         self._waiting_turn = None
         has_output = bool(msg.reasoning and msg.reasoning.strip()) or bool(msg.content and msg.content.strip())
         if has_output:
-            self._append_history("divider", f"turn {msg.turn} · {msg.latency:.1f}s")
+            divider = f"turn {msg.turn} · {msg.latency:.1f}s"
+            if msg.finish_reason:
+                divider += f" · {msg.finish_reason}"
+            self._append_history("divider", divider)
         if msg.reasoning and msg.reasoning.strip():
             self._append_history("reasoning", msg.reasoning.strip())
         if msg.content and msg.content.strip():
@@ -430,12 +491,25 @@ class RunScreen(Screen):
                 "total": msg.total_tokens,
             },
         )
+        self._last_output_use = msg.completion_tokens
+        self._update_output_use()
         self._live_turn = None
         self._live_content = ""
         self._live_reasoning = ""
         self._live_tool_slots = {}
         self._live_ttft = None
         self.query_one("#live-text", Static).update("")
+
+    def _update_output_use(self) -> None:
+        """Latest completion tokens versus the configured output cap."""
+        cap = self.config.max_output_tokens
+        if self._last_output_use is None:
+            self.query_one("#st-out-cap", Label).update("—")
+        elif cap:
+            self.query_one("#st-out-cap", Label).update(f"{self._last_output_use:,}/{cap:,}")
+        else:
+            self.query_one("#st-out-cap", Label).update(f"{self._last_output_use:,}")
+
 
     @on(ToolCallMsg)
     def _on_tool_call(self, msg: ToolCallMsg) -> None:
@@ -455,6 +529,7 @@ class RunScreen(Screen):
         self.query_one("#history", Label).update(f"Moves: {msg.total_moves}  |  {history or '(none)'}")
         self.query_one("#st-turns", Label).update(f"{msg.turns}/{self.config.max_turns}")
         self.query_one("#st-tools", Label).update(str(msg.tool_calls))
+        self.query_one("#st-text", Label).update(str(msg.text_actions))
         self.query_one("#st-moves", Label).update(str(msg.total_moves))
         if msg.solved:
             self.query_one("#st-score", Label).update("solved ✓")
@@ -465,8 +540,15 @@ class RunScreen(Screen):
         s = msg.solve
         status = "SOLVED" if s.solved else ("FAILED" if s.error else "UNSOLVED")
         color = "green" if s.solved else "red"
-        line = f"[{color}]{status}[/{color}] moves={s.total_moves} turns={s.turns} tools={s.tool_calls} "
-        line += f"par={s.par} score={s.score} time={s.elapsed:.1f}s"
+        line = (f"[{color}]{status}[/{color}] moves={s.total_moves} turns={s.turns} "
+                f"tools={s.tool_calls} text={s.text_actions} "
+                f"par={s.par} score={s.score} time={s.elapsed:.1f}s")
+        if s.finish_reasons:
+            line += f" finish={','.join(s.finish_reasons)}"
+            if s.truncated:
+                line += " (truncated)"
+        line += (f" est: reasoning={s.estimated_reasoning_tokens} "
+                 f"cacheable={s.estimated_cacheable_tokens}")
         if s.error:
             line += f"  [dim]({s.error})[/dim]"
         self._append_history("log", line)
@@ -492,10 +574,16 @@ class RunScreen(Screen):
             self.query_one("#run-status", Static).update(
                 f"waiting for model{retry} {self._spinner_char()} {elapsed:.0f}s"
             )
-        elif self._live_turn is not None:
-            # keep elapsed counter fresh while streaming
-            pass
         elapsed = time.monotonic() - self._solve_started
         self.query_one("#st-time", Label).update(f"{elapsed:.1f}s")
-        if self._tok_out > 0 and elapsed > 0:
+        if self._live_turn is not None:
+            # Stream usage generally arrives only in the final SSE chunk, so
+            # estimate the active rate from streamed reasoning and content.
+            stream_elapsed = time.monotonic() - self._live_stream_started
+            if self._live_chars > 0 and stream_elapsed > 0:
+                estimated_tokens = (self._live_chars + 3) // 4
+                self.query_one("#st-speed", Label).update(
+                    f"{estimated_tokens / stream_elapsed:.0f} tok/s"
+                )
+        elif self._tok_out > 0 and elapsed > 0:
             self.query_one("#st-speed", Label).update(f"{self._tok_out / elapsed:.0f} tok/s")

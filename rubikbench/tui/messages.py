@@ -26,6 +26,7 @@ class StateMsg(Message):
         turns: int,
         tool_calls: int,
         solved: bool,
+        text_actions: int = 0,
     ) -> None:
         super().__init__()
         self.facelets = facelets
@@ -34,6 +35,7 @@ class StateMsg(Message):
         self.turns = turns
         self.tool_calls = tool_calls
         self.solved = solved
+        self.text_actions = text_actions
 
 
 class LogMsg(Message):
@@ -65,6 +67,7 @@ class TurnMsg(Message):
         reasoning_tokens: int = 0,
         cached_tokens: int = 0,
         total_tokens: int = 0,
+        finish_reason: str | None = None,
     ) -> None:
         super().__init__()
         self.turn = turn
@@ -77,7 +80,7 @@ class TurnMsg(Message):
         self.reasoning_tokens = reasoning_tokens
         self.cached_tokens = cached_tokens
         self.total_tokens = total_tokens
-
+        self.finish_reason = finish_reason
 
 class StreamMsg(Message):
     """One streaming chunk of the model's reply (content / tool-call fragments)."""
@@ -121,6 +124,18 @@ class ToolResultMsg(Message):
         self.turn = turn
         self.name = name
         self.content = content
+
+
+class ContextMsg(Message):
+    """Estimated request-context telemetry from the live solve."""
+
+    def __init__(self, current: int, peak: int, budget: int | None, trim_count: int, output_cap: int | None) -> None:
+        super().__init__()
+        self.current = current
+        self.peak = peak
+        self.budget = budget
+        self.trim_count = trim_count
+        self.output_cap = output_cap
 
 
 class SolveDoneMsg(Message):

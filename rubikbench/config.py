@@ -54,11 +54,17 @@ class BenchmarkConfig:
     #: Optional prompt-cache retention request, merged as ``prompt_cache_retention``
     #: (seconds). Cached-token usage is always recorded when the server reports it.
     cache_retention: int | None = None
-    #: Output token cap forwarded as the standard ``max_tokens`` parameter.
+    #: Output cap forwarded as the standard ``max_tokens`` parameter.
     max_output_tokens: int | None = None
-    #: Approximate cap on the request context (tokens). Older conversation turns
-    #: are trimmed to stay below this value; ``None`` disables trimming.
+    #: Model context-window capacity. Input is budgeted after reserving output.
+    context_window_tokens: int | None = None
+    #: Optional output reserve; defaults to ``max_output_tokens`` when unset.
+    output_token_reserve: int | None = None
+    #: Approximate input budget override for legacy configurations. New configs
+    #: should set ``context_window_tokens`` instead.
     max_input_tokens: int | None = None
+    #: Margin reserved for provider request framing.
+    context_safety_margin: int = 128
     #: Abort a streaming request and retry if no chunk arrives for this many
     #: seconds (idle watchdog). ``None`` disables it and relies on ``timeout``.
     stream_idle_timeout: float | None = None
@@ -72,8 +78,14 @@ class BenchmarkConfig:
     scramble_len: int = 22
     #: RNG seed for scrambles; ``None`` = fresh random run.
     seed: int | None = None
-    #: Accept moves written in plain assistant text (not via apply_moves).
-    allow_text_moves: bool = True
+    #: Strict tool-only is the benchmark protocol. Text parsing is compatibility-only.
+    allow_text_moves: bool = False
+    #: Persisted protocol label, preventing comparison of incompatible runs.
+    protocol_mode: str = "tool_only"
+    #: Sticker is the spatial benchmark; cubie-v1 is an explicitly labeled view.
+    presentation_mode: str = "stickers-v1"
+    #: Named run profile; explicit values remain authoritative.
+    profile: str = "full"
     #: Custom scrambles file list (used when ``scramble_preset == "file"``).
     scrambles: list[str] = field(default_factory=list)
     #: "" = random; "file" = custom scrambles list; otherwise a premade set name.
@@ -116,6 +128,18 @@ class BenchmarkConfig:
             raise ValueError("max_input_tokens must be >= 1 or null")
         if self.cache_retention is not None and self.cache_retention < 1:
             raise ValueError("cache_retention must be >= 1 or null")
+        if self.context_window_tokens is not None and self.context_window_tokens < 1:
+            raise ValueError("context_window_tokens must be >= 1 or null")
+        if self.output_token_reserve is not None and self.output_token_reserve < 1:
+            raise ValueError("output_token_reserve must be >= 1 or null")
+        if self.context_safety_margin < 0:
+            raise ValueError("context_safety_margin must be >= 0")
+        if self.protocol_mode not in ("tool_only", "text_compat"):
+            raise ValueError("protocol_mode must be 'tool_only' or 'text_compat'")
+        if self.presentation_mode not in ("stickers-v1", "cubie-v1"):
+            raise ValueError("presentation_mode must be 'stickers-v1' or 'cubie-v1'")
+        if self.profile not in RUN_PROFILES:
+            raise ValueError(f"profile must be one of: {', '.join(RUN_PROFILES)}")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
             raise ValueError("max_output_tokens must be >= 1 or null")
         if self.top_p is not None and not (0 < self.top_p <= 1):
@@ -134,10 +158,12 @@ class BenchmarkConfig:
         if self.scramble_preset == "file" and not self.scrambles:
             raise ValueError("scramble_preset 'file' requires a non-empty scrambles list")
 
-    # --- Serialization -----------------------------------------------------
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
+    def to_dict(self, *, include_credentials: bool = False) -> dict[str, Any]:
+        """Safe persistence/export representation; credentials never leave memory."""
+        data = asdict(self)
+        if not include_credentials:
+            data.pop("api_key", None)
+        return data
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BenchmarkConfig:
         known = {f.name for f in fields(cls)}
@@ -181,7 +207,23 @@ def load_config(path: str | Path = DEFAULT_CONFIG_PATH) -> BenchmarkConfig:
 
 
 def save_config(cfg: BenchmarkConfig, path: str | Path = DEFAULT_CONFIG_PATH) -> None:
+    """Persist configuration without writing credentials to disk."""
     Path(path).write_text(json.dumps(cfg.to_dict(), indent=2) + "\n", encoding="utf-8")
+
+
+RUN_PROFILES: dict[str, dict[str, int]] = {
+    "smoke": {"num_solves": 1, "max_turns": 12, "max_output_tokens": 2048},
+    "diagnostic": {"num_solves": 2, "max_turns": 30, "max_output_tokens": 4096},
+    "full": {"num_solves": 5, "max_turns": 40, "max_output_tokens": 8192},
+    "research": {"num_solves": 10, "max_turns": 80, "max_output_tokens": 8192},
+}
+
+
+def apply_profile(cfg: BenchmarkConfig, profile: str) -> BenchmarkConfig:
+    """Apply a named conservative profile; callers may override fields afterward."""
+    if profile not in RUN_PROFILES:
+        raise ValueError(f"unknown profile: {profile}")
+    return replace(cfg, profile=profile, **RUN_PROFILES[profile])
 
 
 def preset_defaults(name: str, key_from_env: bool = True) -> BenchmarkConfig:

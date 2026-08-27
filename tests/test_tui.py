@@ -124,10 +124,12 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
 
     from rubikbench.cube import Cube
     from rubikbench.tui.messages import (
+        SolveDoneMsg,
         StateMsg,
         StreamMsg,
         ToolCallMsg,
         ToolResultMsg,
+        TurnMsg,
         TurnStartedMsg,
     )
     from rubikbench.tui.run_screen import RunScreen
@@ -181,6 +183,20 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         await pilot.pause()
         assert "Let me think about the state..." in _model_text(app)
 
+        # Model output is literal text, even when it resembles Textual markup.
+        markup_like = "B [ ^jl=+] R and move [R2]"
+        screen.post_message(StreamMsg(1, None, None, None, None, None, markup_like))
+        await pilot.pause()
+        assert markup_like in _model_text(app)
+
+        # Usage commonly arrives only in the final chunk; rate still updates
+        # from the visible reasoning/content while the response is streaming.
+        screen._live_stream_started -= 1.0
+        screen._tick_stats()
+        speed = str(screen.query_one("#st-speed", Label).render())
+        assert speed.endswith(" tok/s")
+        assert speed != "0 tok/s"
+
         # content streams in across chunks, with a first-token time
         screen.post_message(StreamMsg(1, "Let me ", None, None, None, 0.5))
         await pilot.pause()
@@ -211,6 +227,36 @@ async def test_run_screen_streams_live_output(mock, tmp_path):
         text = _model_text(app)
         assert "apply_moves" in text
         assert "The cube is SOLVED" in text
+
+        # turn-level diagnostics: finish reason, output use versus output cap
+        screen.post_message(TurnMsg(3, "wrapped up", [], 0.3, None, 10, 128, 5, 3, 146, "stop"))
+        await pilot.pause()
+        history_text = str(screen.query_one("#history-text", Static).render())
+        assert "turn 3" in history_text
+        assert "· stop" in history_text
+        assert str(screen.query_one("#st-out-cap", Label).render()) == "128/512"
+
+        # text actions are counted separately from tool calls
+        screen.post_message(StateMsg(list(Cube.solved().facelets), [], 0, 3, 1, False, 2))
+        await pilot.pause()
+        assert str(screen.query_one("#st-text", Label).render()) == "2"
+
+        # solve summary: finish-reason list and reported-vs-estimated token metrics
+        from rubikbench.benchmark import SolveResult
+
+        sr = SolveResult(
+            index=0, scramble=["R", "U"], solved=True, turns=1, tool_calls=1, text_actions=0,
+            total_moves=2, elapsed=0.5, prompt_tokens=10, completion_tokens=128,
+            reasoning_tokens=5, estimated_reasoning_tokens=9, cached_tokens=3,
+            estimated_cacheable_tokens=200, total_tokens=146, finish_reasons=["tool_calls", "stop"],
+            truncated=True, timeline=[], par=4, score=900.0, breakdown={}, transcript=[],
+        )
+        screen.post_message(SolveDoneMsg(0, 1, sr))
+        await pilot.pause()
+        final_text = str(screen.query_one("#history-text", Static).render())
+        assert "finish=tool_calls,stop" in final_text
+        assert "(truncated)" in final_text
+        assert "est: reasoning=9" in final_text and "cacheable=200" in final_text
 async def test_replay_screen_steps_and_plays(mock, tmp_path):
     """Replay screen walks a real solve's timeline and toggles playback."""
     from textual.widgets import Button, OptionList, Select

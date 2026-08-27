@@ -84,8 +84,9 @@ def assert_valid_scramble(moves: list[str]) -> None:
 
 PREMADE_SCRAMBLES: dict[str, list[str]] = {
     # The canonical God's-number state: every edge flipped in place, 20 moves.
+    # Inverted token-for-token when clockwise semantics were corrected.
     "superflip": [
-        "R' L F' U' D R2 F2 R' F B L2 U R2 L2 D' F2 U' R2 B2 D'",
+        "R L' F U D' R2 F2 R F' B' L2 U' R2 L2 D F2 U R2 B2 D",
     ],
     "cube-in-cube": [
         "F L F U' R U F2 L2 U' L' B D' B' L2 U",
@@ -116,10 +117,26 @@ PREMADE_SCRAMBLES: dict[str, list[str]] = {
     ],
 }
 
+# Frozen v1 difficulty ladder. Labels encode the requested sequence depth, not
+# an asserted optimal distance (which is expensive to prove for every state).
+DIFFICULTY_LADDER_VERSION = "ladder-v1"
+for _depth, _moves in {
+    1: ["R", "U", "F", "D"],
+    2: ["R U", "F R", "L2 D"],
+    3: ["R U F", "L D B", "R2 U F'"],
+    5: ["R U F D L", "F2 R U' L D"],
+    8: ["R U F D L B R U", "F2 R U' L D B' R2 U"],
+    12: ["R U F D L B R U F D L B", "F2 R U' L D B' R2 U F D' L B"],
+}.items():
+    PREMADE_SCRAMBLES[f"ladder-{_depth}-v1"] = _moves
+
 
 def premade_labels() -> list[tuple[str, str]]:
-    """Display labels for the TUI: ``(label, value)`` pairs."""
-    labels = [("Superflip", "superflip"), ("Cube in cube", "cube-in-cube")]
+    """Display meaningful labels for every selectable frozen preset."""
+    labels = [("Superflip (20-move)", "superflip"), ("Cube in cube", "cube-in-cube")]
+    for depth in (1, 2, 3, 5, 8, 12):
+        name = f"ladder-{depth}-v1"
+        labels.append((f"Difficulty ladder v1 — {depth} moves", name))
     for length in (10, 16, 22, 25):
         name = f"catalog-{length}"
         labels.append((f"Catalog {length} moves", name))

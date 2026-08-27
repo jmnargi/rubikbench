@@ -413,7 +413,7 @@ class TextSolverClient:
 
 
 def test_text_moves_fallback_solves(mock):
-    result = run_solve(0, ["R", "U", "F'"], base_cfg(), TextSolverClient())
+    result = run_solve(0, ["R", "U", "F'"], base_cfg(protocol_mode="text_compat"), TextSolverClient())
     assert result.solved
     assert result.tool_calls == 0
     assert result.total_moves == 3
@@ -530,17 +530,15 @@ def test_trim_removes_complete_turn_units():
     assert any(m.get("content") == "b" * 500 for m in out)
 
 
-def test_trim_small_cap_still_keeps_prefix():
+def test_trim_small_cap_raises_when_prefix_cannot_fit():
+    """A budget too small for the immutable system/initial prefix raises clearly."""
     messages = [
         _msg("system", "s" * 100),
         _msg("user", "u" * 100),
         _msg("assistant", "a" * 500),
     ]
-    out, trimmed = trim_messages(messages, 60)
-    assert trimmed is True
-    assert len(out) == 2
-    assert out[0]["role"] == "system"
-
+    with pytest.raises(ValueError, match="cannot fit"):
+        trim_messages(messages, 60)
 
 class RecordingClient:
     """Wraps another client and records every messages list it receives."""
@@ -564,17 +562,24 @@ def test_max_output_tokens_sent_in_body(mock):
 
 
 def test_max_input_tokens_trims_history(mock):
+    """Trimming preserves the immutable prefix plus the latest-state checkpoint."""
     _mock = mock
-    cfg = base_cfg(max_turns=10, max_input_tokens=200, allow_text_moves=False)
-    recording = RecordingClient(FixedContentClient("Hmm, let me think about this..."))
+    # Small but sufficient: fits system + initial user + current-state
+    # checkpoint, but never the growing transcript, so every request once the
+    # history exceeds the cap collapses to that checkpoint prefix.
+    cfg = base_cfg(max_turns=10, max_input_tokens=700, allow_text_moves=False)
+    recording = RecordingClient(FixedContentClient("x" * 2000))
     run_solve(0, ["R", "U"], cfg, recording)
-    # The cap is below the fixed system + initial user prefix size, so every
-    # request collapses to that prefix plus no middle turns.
+    from rubikbench.cube import Cube
+
+    expected = Cube.solved()
+    expected.apply(["R", "U"])
     assert len(recording.seen) == 10
-    for messages in recording.seen:
+    for messages in recording.seen[1:]:  # first request has no history to trim
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
-        assert len(messages) == 2
+        assert messages[2]["content"].startswith("[CURRENT STATE CHECKPOINT]")
+        assert expected.facelet_string() in messages[2]["content"]
 
 
 def test_runner_premade_catalog_cycles(mock):

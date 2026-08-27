@@ -60,7 +60,7 @@ class ResultsScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#table", DataTable)
-        table.add_columns("#", "Solved", "Turns", "Tools", "Moves", "Par", "Time (s)", "Score")
+        table.add_columns("#", "Solved", "Turns", "Tools", "Text", "Moves", "Par", "Time (s)", "Score")
         table.cursor_type = "row"
         for s in self.result.solves:
             table.add_row(
@@ -68,6 +68,7 @@ class ResultsScreen(Screen):
                 "✓" if s.solved else ("✗" if s.error else "·"),
                 str(s.turns),
                 str(s.tool_calls),
+                str(s.text_actions),
                 str(s.total_moves),
                 str(s.par),
                 f"{s.elapsed:.1f}",
@@ -77,7 +78,7 @@ class ResultsScreen(Screen):
         if self.result.solves:
             self.set_timer(0.05, lambda: self._show_detail(0))
         else:
-            table.add_row("—", "—", "—", "—", "—", "—", "—", "0")
+            table.add_row("—", "—", "—", "—", "—", "—", "—", "—", "0")
 
     def _richlog(self, id_: str) -> RichLog | None:
         try:
@@ -96,10 +97,18 @@ class ResultsScreen(Screen):
             summary.clear()
             summary.write(f"[bold]{'SOLVED' if solve.solved else 'UNSOLVED'}[/bold] " + (f"[dim]({solve.error})[/dim]" if solve.error else ""))
             summary.write(f"score: [bold]{solve.score}[/bold] / 1000")
-            for k, v in solve.breakdown.items():
-                if k == "weights":
-                    continue
-                summary.write(f"  {k}: {v}")
+            if solve.finish_reasons:
+                finish = ", ".join(solve.finish_reasons)
+                if solve.truncated:
+                    finish += " (truncated)"
+                summary.write(f"finish: {finish}")
+            summary.write(
+                f"actions: {solve.tool_calls} tool(s), {solve.text_actions} text action(s)"
+            )
+            summary.write(
+                f"tokens: reasoning {solve.reasoning_tokens} (est {solve.estimated_reasoning_tokens}), "
+                f"cached {solve.cached_tokens} (est cacheable {solve.estimated_cacheable_tokens})"
+            )
 
         moves = self._richlog("detail-moves")
         if moves is not None:

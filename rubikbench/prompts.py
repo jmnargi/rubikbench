@@ -21,10 +21,20 @@ You have exactly one tool:
 Scoring depends on total moves, turns, and tool calls used. Fewer is better."""
 
 
-def initial_user_prompt(cube: Cube) -> str:
-    """The first user message: the cube state only, never the scramble."""
+def initial_user_prompt(cube: Cube, presentation_mode: str = "stickers-v1") -> str:
+    """The first user message: derived state only, never the scramble."""
+    if presentation_mode == "cubie-v1":
+        return (
+            "Solve the cube from this legal structured cubie state. Position and piece names "
+            "use the fixed U/R/F/D/L/B face orientation. Every corner gives the occupying "
+            "piece and a numeric orientation (0, 1, or 2); every edge gives the occupying "
+            "piece and orientation 0 or 1. The state supplies the precise convention.\n"
+            f"{cube.cubie_state()}\n\n"
+            "This is the current state. Every tool result supersedes it."
+        )
     return (
-        "Solve the cube from this state.\n"
+        "Solve the cube from this state. Face orientation is fixed: U is up, D down, "
+        "F faces you, B faces away, R is right, and L is left.\n"
         f"Facelet string (faces in order U R F D L B):\n{cube.facelet_string()}\n\n"
         f"Faces (each is a 3x3 grid, rows top-to-bottom):\n{render_faces(cube.facelets)}\n\n"
         f"Compact net:\n{render_plain(cube.facelets)}\n\n"

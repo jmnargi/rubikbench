@@ -27,14 +27,8 @@ def apply_seq(seq: list[str]) -> Cube:
 
 
 def apply_kociemba_solution(cube: Cube, solution: str) -> None:
-    """Apply a kociemba solution string, mirroring its inverted semantics."""
-    for raw in solution.split():
-        if raw.endswith("2"):
-            cube.apply([raw])
-        elif raw.endswith("'"):
-            cube.apply([raw[:-1]])
-        else:
-            cube.apply([raw + "'"])
+    """Apply a kociemba solution string as-is (standard clockwise semantics)."""
+    cube.apply(solution.split())
 
 
 def test_all_moves_are_valid_permutations():
@@ -176,9 +170,11 @@ def test_premade_scrambles_are_valid():
     expected = {"superflip", "cube-in-cube", "catalog-10", "catalog-16", "catalog-22", "catalog-25"}
     assert expected <= set(PREMADE_SCRAMBLES)
     for name, seqs in PREMADE_SCRAMBLES.items():
+        versioned_ladder = name.startswith("ladder-")  # labels encode depth, not par
         for text in seqs:
             moves = scramble_from_string(text)
-            assert len(moves) >= 10, name
+            if not versioned_ladder:
+                assert len(moves) >= 10, name
             cube = apply_seq(moves)
             assert not cube.is_solved(), name
             for m in solution_for_scramble(moves):

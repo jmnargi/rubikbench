@@ -154,18 +154,18 @@ class OpenAICompatibleClient:
 
     @staticmethod
     def _usage_fields(usage: Any) -> tuple[int, int, int, int, int]:
-        """(prompt, completion, reasoning, cached, total) tokens from OpenAI-style usage."""
+        """(prompt, completion, reasoning, cached, total) provider-reported usage."""
+        def get(value: Any, name: str) -> int:
+            return (value.get(name, 0) if isinstance(value, dict) else getattr(value, name, 0)) or 0
         prompt = completion = reasoning = cached = total = 0
         if usage is not None:
-            prompt = getattr(usage, "prompt_tokens", 0) or 0
-            completion = getattr(usage, "completion_tokens", 0) or 0
-            total = getattr(usage, "total_tokens", 0) or 0
-            details = getattr(usage, "prompt_tokens_details", None)
-            if details is not None:
-                cached = getattr(details, "cached_tokens", 0) or 0
-            completion_details = getattr(usage, "completion_tokens_details", None)
-            if completion_details is not None:
-                reasoning = getattr(completion_details, "reasoning_tokens", 0) or 0
+            prompt, completion, total = get(usage, "prompt_tokens"), get(usage, "completion_tokens"), get(usage, "total_tokens")
+            details = get(usage, "prompt_tokens_details")
+            if details:
+                cached = get(details, "cached_tokens")
+            details = get(usage, "completion_tokens_details")
+            if details:
+                reasoning = get(details, "reasoning_tokens")
         return prompt, completion, reasoning, cached, total
 
     # -- internals ----------------------------------------------------------
@@ -208,13 +208,16 @@ class OpenAICompatibleClient:
 
         try:
             for chunk in stream:
-                (
-                    prompt_tokens,
-                    completion_tokens,
-                    reasoning_tokens,
-                    cached_tokens,
-                    total_tokens,
-                ) = self._usage_fields(getattr(chunk, "usage", None) or None)
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    candidate = self._usage_fields(usage)
+                    # Providers may emit partial/cumulative usage only in the
+                    # final chunk; never erase a previously reported value.
+                    prompt_tokens = max(prompt_tokens, candidate[0])
+                    completion_tokens = max(completion_tokens, candidate[1])
+                    reasoning_tokens = max(reasoning_tokens, candidate[2])
+                    cached_tokens = max(cached_tokens, candidate[3])
+                    total_tokens = max(total_tokens, candidate[4])
                 delta_content: str | None = None
                 delta_reasoning: str | None = None
                 tool_deltas_out: list[dict[str, Any]] = []

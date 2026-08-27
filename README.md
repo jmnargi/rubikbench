@@ -6,21 +6,24 @@ The model uses tools to make cube moves. Each message includes the current cube 
 
 RubikBench includes a Textual terminal user interface (TUI). The TUI has three screens:
 
-- Configuration
 - Live run
 - Results
+- Replay
 
 ## Terms
 
 | Term | Meaning |
 |---|---|
 | Conversation turn | One model reply in the benchmark loop. |
+| Context window tokens | The total token capacity of the model for one request. The input budget is the context window minus the output reserve, the tool-schema overhead, and a safety margin. |
 | Endpoint | A server URL that accepts chat-completion requests. |
 | Extra body parameters | JSON values that RubikBench sends with each chat-completion request. |
-| Max input tokens | The maximum number of tokens in one request. RubikBench removes older conversation turns when needed to stay below this limit. |
-| Max output tokens | The maximum number of tokens in one model reply. RubikBench sends this value as `max_tokens` in the request body. |
+| Max input tokens | A legacy optional override for the input budget. When set, RubikBench removes older conversation turns when needed to stay below the limit. |
 | Move | One face turn of the cube, such as `R` or `U'`. |
+| Output cap | The maximum tokens in one model reply. RubikBench sends this value as `max_tokens` in the request body. RubikBench reserves output tokens from the context window. |
 | Par | The reference number of moves for a solution. |
+| Presentation mode | The cube-state format that RubikBench sends to the model. `stickers-v1` is the default. `cubie-v1` uses structured piece identities and numeric orientations. |
+| Protocol mode | The rules that RubikBench uses to apply moves. `tool_only` is the default benchmark contract. `text_compat` adds text parsing as an explicit compatibility mode. |
 | Scramble | The starting mixed state of the cube. |
 | Starting scramble set | The source of the scrambles: random, premade, or a custom file. |
 | Tool call | A request from the model to execute one tool. |
@@ -76,6 +79,11 @@ The live run screen shows:
 - The current cube and its colors
 - The move history
 - Statistics for turns, tool calls, moves, elapsed time, and score
+- Current and peak context usage against the input budget, the trim count, and output-cap utilization
+- The protocol mode and the presentation mode for the run
+- Separate counts for tool calls and text actions
+- Reasoning and cache tokens, both as the provider reports them and as RubikBench estimates them
+- A legend that explains the face orientations
 - A live log of model activity
 
 Press `Ctrl+C` or `q` to quit.
@@ -95,10 +103,9 @@ For each solve, RubikBench performs these steps:
    - An API error stops the run.
    - You stop the run.
 
-The model has two tools:
+The model has one tool:
 
 - `apply_moves` applies one or more moves in one call. The moves use Singmaster notation, such as `R U R' U'`. RubikBench does not apply invalid tokens.
-- `reset_cube` returns the cube to the original scramble. This action uses conversation turns. It does not add moves.
 
 RubikBench always sends the current cube state. It sends the state in the initial message, and each tool result includes the updated state. There is no `get_cube_state` tool. The model does not need a call to read the state. If the provider sends chain-of-thought from a reasoning model, RubikBench streams it with the answer and records it in the transcript.
 
@@ -106,7 +113,7 @@ The model can apply many moves in one tool call. It can also make more than one 
 
 ### Moves as text
 
-Some models write moves as text instead of using the tool. RubikBench can parse and apply these moves. The `allow text moves` setting controls this behavior. The default value is on.
+Some models write moves as text instead of using the tool. RubikBench can parse and apply these moves. The `allow text moves` setting controls this behavior. The default value is off. The strict tool-only protocol is the default benchmark contract. Text parsing is available only as an explicit compatibility mode. RubikBench counts text moves as actions and includes them in the score.
 
 ### Retries
 
@@ -131,6 +138,7 @@ The `starting scramble set` setting selects the scramble source. It has three mo
   - **Superflip:** One scramble that flips every edge piece in place. It needs 20 moves to solve.
   - **Cube in cube:** One scramble that creates a small cube pattern on each face.
   - **Catalog 10, 16, 22, and 25 moves:** Each catalog has four fixed scrambles.
+  - **Difficulty ladder:** Versioned premade fixtures at depths 1, 2, 3, 5, 8, and 12 moves (`ladder-1-v1` through `ladder-12-v1`). RubikBench uses them to measure the capability frontier: how the solve rate changes with the scramble depth.
 - **Custom scrambles file:** RubikBench reads one scramble from each line of a text file.
 
 RubikBench checks each premade and custom scramble before the run. It applies the scramble to a solved cube and then applies the inverse sequence. A bad scramble stops the run and displays an error.
@@ -160,19 +168,17 @@ RubikBench records elapsed time and token usage for each solve. These values do 
 ## 7. Results
 
 The results screen shows:
-
-- Aggregate statistics, including solve rate and average score
-- One table row for each solve, with turns, tool calls, moves, par, time, and score
+- One table row for each solve, with turns, tool calls, moves, par, time, score, and finish reasons
 - Details for the selected solve in three tabs:
   - **Summary:** The score breakdown
   - **Moves:** The scramble and the applied moves
   - **Transcript:** All model activity
 
-The results screen also shows token data and finish reasons. Token data includes input, output, and cached tokens for each solve. The finish reason `length` marks a truncated solve.
+The results screen also shows more data for each solve. It shows token data and finish reasons. Token data includes input and output tokens, provider-reported and estimated reasoning tokens, cached tokens, and estimated cacheable-prefix tokens. Per-solve data also includes the context peak, the trim count, the protocol mode, the presentation mode, and the difficulty. The finish reason `length` marks a truncated solve.
 
 Select **Replay** to review a solve step by step. The replay screen shows the cube and a timeline. The timeline has one entry for each state change. Press the space bar to play or pause. Use the arrow keys to move one step. Use the plus and minus keys to change the speed. Select another solve to replay it.
 
-Select **Export JSONL** to save the results. The output file is in the `rubikbench_results` directory.
+Select **Export JSONL** to save the results. The output file is in the `rubikbench_results` directory. The file never includes the API key.
 
 ## 8. Run the benchmark without the TUI
 
@@ -206,8 +212,8 @@ Without a config file, RubikBench uses the OpenAI endpoint and model by default.
 | `RUBIKBENCH_API_KEY` | Generic API key override for any endpoint. |
 | `RUBIKBENCH_BASE_URL` | Endpoint URL for any OpenAI-compatible `/v1` server. |
 | `RUBIKBENCH_MODEL` | Model name. |
-| `RUBIKBENCH_MAX_INPUT_TOKENS` | Context limit. RubikBench removes older turns when needed. |
-| `RUBIKBENCH_MAX_OUTPUT_TOKENS` | Value that RubikBench sends as `max_tokens` in the request. |
+| `RUBIKBENCH_MAX_INPUT_TOKENS` | Legacy optional override for the input budget. RubikBench removes older turns when needed. |
+| `RUBIKBENCH_MAX_OUTPUT_TOKENS` | Output cap. RubikBench sends this value as `max_tokens` in the request. |
 | `RUBIKBENCH_TEMPERATURE` | Sampling temperature. A blank value uses the model default. |
 | `RUBIKBENCH_TOP_P` | Nucleus sampling `top_p`. A blank value uses the model default. |
 | `RUBIKBENCH_REPETITION_PENALTY` | vLLM-style repetition penalty. A blank value disables it. |
@@ -231,6 +237,8 @@ RubikBench resolves the API key in this order:
 
 Local servers, including `localhost` and `*.local`, do not need a key. Run `uv run rubikbench validate` to check the resolved settings and the source of the key. Run `uv run rubikbench presets` to list providers.
 
+Config files, result files, and exported datasets never include the API key.
+
 List the presets:
 
 ```bash
@@ -251,13 +259,26 @@ uv run rubikbench run --config cfg.json -o results.jsonl
 
 The `run` command starts immediately. It does not need the TUI or a config file. Without `--config`, it reads `.env`. You can pass each setting as a flag. A flag overrides `.env` and the config file.
 
+The new run flags are:
+
+- `--profile {smoke,diagnostic,full,research}`: applies the named run defaults before the explicit flags, so explicit flags still win.
+- `--context-window-tokens N`: the total context window. RubikBench budgets input after the output reserve.
+- `--output-token-reserve N`: tokens reserved for output while RubikBench budgets the input.
+- `--protocol-mode {tool_only,text_compat}`: the move protocol. `tool_only` is the benchmark default.
+- `--presentation-mode {stickers-v1,cubie-v1}`: the cube-state presentation schema.
+- `--scramble-preset NAME`: a premade benchmark set, including the versioned ladder fixtures.
+
+The older `--max-input-tokens` flag remains a legacy optional override for the input budget.
+
 ```bash
 uv run rubikbench run \
+  --profile diagnostic \
+  --context-window-tokens 32768 \
+  --output-token-reserve 4096 \
+  --presentation-mode cubie-v1 \
   --base-url https://api.openai.com/v1 \
   --api-key sk-... \
   --model gpt-4o \
-  --max-input-tokens 32768 \
-  --max-output-tokens 4096 \
   -n 3 --max-turns 40 --scramble-len 22 --seed 42
 ```
 
@@ -265,7 +286,7 @@ Run `uv run rubikbench run --help` for the complete flag list. Model text and to
 
 The `run` command prints a JSON summary to standard output. The summary includes solve rate, average score, average moves, token counts, retries, and truncated solves.
 
-The command writes one line to the output file for each solve. The first line is a header with the configuration and aggregate statistics. Each solve line includes analytics and the complete transcript. Analytics include input tokens, output tokens, cached tokens, retries, finish reasons, and the truncation flag. Each solve line also includes a timeline with the cube state after each state change.
+The command writes one line to the output file for each solve. The first line is a header with the configuration and aggregate statistics. Each solve line includes analytics and the complete transcript. Analytics include input and output tokens, provider-reported and estimated reasoning tokens, cached tokens, estimated cacheable-prefix tokens, context peak, trim count, retries, finish reasons, the truncation flag, the protocol mode, the presentation mode, and the difficulty. Each solve line also includes a timeline with the cube state after each state change. The output file never includes the API key.
 
 Merge run files into one dataset file:
 
@@ -273,7 +294,7 @@ Merge run files into one dataset file:
 uv run rubikbench aggregate run1.jsonl run2.jsonl -o dataset.json
 ```
 
-The dataset file is one JSON document. It contains all solve records and totals. Totals include tokens, turns, tool calls, moves, retries, and truncated solves.
+The dataset file is one JSON document. It contains all solve records and totals. Totals include tokens, turns, tool calls, moves, retries, and truncated solves. The dataset also includes a per-difficulty capability frontier: the solve rate and move efficiency for each difficulty level. The dataset never includes the API key.
 
 Replay a run file in the browser:
 
