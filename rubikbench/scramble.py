@@ -50,16 +50,16 @@ def solution_for_scramble(scramble: list[str]) -> list[str]:
     return solution
 
 
-def scramble_is_valid(moves: list[str]) -> bool:
+def scramble_is_valid(moves: list[str], size: int = 3) -> bool:
     """Sanity check: replaying the inverse of a scramble returns to solved."""
-    cube = Cube.solved()
+    cube = Cube.solved(size=size)
     cube.scramble = moves
     cube.reset_to_scramble()
     for m in solution_for_scramble(moves):
         cube.apply([m])
     return cube.is_solved()
 
-def assert_valid_scramble(moves: list[str]) -> None:
+def assert_valid_scramble(moves: list[str], size: int = 3) -> None:
     """Raise ValueError unless `moves` parses and solving it returns a solved cube.
 
     Every legal face-turn sequence from a solved cube is solvable by
@@ -71,7 +71,7 @@ def assert_valid_scramble(moves: list[str]) -> None:
         raise ValueError(f"invalid scramble tokens: {invalid!r}")
     if not valid:
         raise ValueError("scramble is empty")
-    if not scramble_is_valid(valid):
+    if not scramble_is_valid(valid, size=size):
         raise ValueError(f"scramble does not solve back to a solved cube: {moves!r}")
 
 

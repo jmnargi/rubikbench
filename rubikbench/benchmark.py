@@ -22,7 +22,7 @@ from typing import Any
 from .config import BenchmarkConfig
 from .cube import Cube, parse_moves
 from .llm import LLMClient, LLMError
-from .prompts import SYSTEM_PROMPT, TOOLS, initial_user_prompt
+from .prompts import TOOLS, build_system_prompt, initial_user_prompt
 from .rendering import render_faces, render_plain
 from .scoring import Weights, compute_score
 from .scramble import (
@@ -31,7 +31,7 @@ from .scramble import (
     scramble_from_string,
     scramble_to_string,
 )
-from .solver_ref import GODS_NUMBER, par_moves
+from .solver_ref import GODS_NUMBER, GODS_NUMBER_2X2, par_moves, par_moves_2x2
 
 #: callback(kind: str, payload: dict) used to stream progress to a UI.
 Emitter = Callable[[str, dict[str, Any]], None]
@@ -56,9 +56,10 @@ REPEATED_CALL_LIMIT = 3
 class SolveContext:
     """Mutable state shared by the tool calls of one solve."""
 
-    def __init__(self, scramble: list[str]) -> None:
+    def __init__(self, scramble: list[str], size: int = 3) -> None:
         self.scramble = list(scramble)
-        self.cube = Cube.solved()
+        self.size = size
+        self.cube = Cube.solved(size=size)
         self.cube.scramble = self.scramble
         self.cube.reset_to_scramble()
         self.total_moves = 0
@@ -75,7 +76,7 @@ class SolveContext:
         return (
             "Facelets (U R F D L B; U up, D down, F front, B back, R right, L left): "
             f"{cube.facelet_string()}\n\n"
-            f"Faces (each is a 3x3 grid, rows top-to-bottom):\n{render_faces(cube.facelets)}\n\n"
+            f"Faces (each is a {cube.size}x{cube.size} grid, rows top-to-bottom):\n{render_faces(cube.facelets)}\n\n"
             f"Compact net:\n{render_plain(cube.facelets)}\n\n"
             f"Move history ({len(cube.history)}): {history}\n"
             f"Solved: {cube.is_solved()}"
@@ -279,9 +280,9 @@ def run_solve(
     emitter: Emitter | None = None,
     cancel_event: threading.Event | None = None,
 ) -> SolveResult:
-    ctx = SolveContext(scramble)
+    ctx = SolveContext(scramble, size=cfg.cube_size)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(cfg.cube_size)},
         {"role": "user", "content": initial_user_prompt(ctx.cube, cfg.presentation_mode)},
     ]
     transcript: list[dict[str, Any]] = []
@@ -543,16 +544,17 @@ def run_solve(
     _emit(emitter, "solve_done", result=result)
     return result
 
-
 def _par_for(scramble: list[str], cfg: BenchmarkConfig) -> int:
     """Reference move count for the scrambled state."""
     if cfg.par_strategy == "fixed":
         return cfg.par_fixed
     if cfg.par_strategy == "god":
-        return GODS_NUMBER
-    cube = Cube.solved()
+        return GODS_NUMBER_2X2 if cfg.cube_size == 2 else GODS_NUMBER
+    cube = Cube.solved(size=cfg.cube_size)
     cube.scramble = scramble
     cube.reset_to_scramble()
+    if cfg.cube_size == 2:
+        return par_moves_2x2(cube.facelet_string(), default=GODS_NUMBER_2X2)
     return par_moves(cube.facelet_string(), is_solved=False, default=GODS_NUMBER)
 
 
@@ -606,7 +608,7 @@ class BenchmarkRunner:
         else:
             return None
         for moves in parsed:
-            assert_valid_scramble(moves)
+            assert_valid_scramble(moves, size=self.cfg.cube_size)
         return parsed
 
 

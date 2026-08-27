@@ -19,7 +19,7 @@ from typing import Any
 from rubikbench.scramble import solution_for_scramble
 
 SCRAMBLE_RE = re.compile(r"Scramble \(\d+ moves\): (.+)")
-FACELET_RE = re.compile(r"Facelet string \([^)]*\):\s*([URFDLB]{54})")
+FACELET_RE = re.compile(r"Facelet string \([^)]*\):\s*([URFDLB]{54}|[URFDLB]{24})")
 
 
 def _solve_for(messages: list[dict[str, Any]]) -> list[str]:
@@ -32,9 +32,15 @@ def _solve_for(messages: list[dict[str, Any]]) -> list[str]:
         content = m.get("content") or ""
         facelet_match = FACELET_RE.search(content)
         if facelet_match:
-            from rubikbench.solver_ref import solve_standard
+            facelets = facelet_match.group(1)
+            if len(facelets) == 24:
+                from rubikbench.solver_ref import solve_2x2
 
-            solution = solve_standard(facelet_match.group(1))
+                solution = solve_2x2(facelets)
+            else:
+                from rubikbench.solver_ref import solve_standard
+
+                solution = solve_standard(facelets)
             if solution is not None:
                 return solution
         scramble_match = SCRAMBLE_RE.search(content)

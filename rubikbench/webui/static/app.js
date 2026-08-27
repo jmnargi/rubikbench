@@ -14,13 +14,18 @@ const FACES = [
   { n: [-1, 0, 0], r: [0, 1, 0], d: [0, 0, -1] },  // L
   { n: [0, 0, -1], r: [-1, 0, 0], d: [0, 0, -1] }, // B
 ];
-const CELL = 2 / 3;
+const N = RUN?.runs_detail?.[0]?.config?.cube_size ?? 3;  // 3 = 3x3x3, 2 = 2x2x2
+const CELL = 2 / N;
 const FACE = 1;
+const PLATE = 0.52 * (3 / N);                // sticker plate width/height
+const PLATE_DEPTH = 0.09 * (3 / N);
+const BODY = 2 * ((N - 1) / N + 0.23);
+// Body half-extent just inside the sticker plates so they visibly protrude.
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
 camera.position.set(3.6, 3.0, 5.2);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 document.getElementById('threed').appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -33,7 +38,7 @@ scene.add(key);
 
 // Rubik's cube body: dark rounded-ish core box + white-edge frame look.
 const body = new THREE.Mesh(
-  new THREE.BoxGeometry(2.28, 2.28, 2.28),
+  new THREE.BoxGeometry(BODY, BODY, BODY),
   new THREE.MeshLambertMaterial({ color: 0x0b0e12, roughness: 0.9 }),
 );
 scene.add(body);
@@ -46,14 +51,14 @@ FACES.forEach((f) => {
   const basis = new THREE.Matrix4().makeBasis(right, down, n);
   const quat = new THREE.Quaternion().setFromRotationMatrix(basis);
   const plate = [];
-  for (let r = 0; r < 3; r++) {
+  for (let r = 0; r < N; r++) {
     const row = [];
-    for (let c = 0; c < 3; c++) {
+    for (let c = 0; c < N; c++) {
       const pos = n.clone().multiplyScalar(FACE)
-        .addScaledVector(right, (c - 1) * CELL)
-        .addScaledVector(down, (r - 1) * CELL);
+        .addScaledVector(right, (c - (N - 1) / 2) * CELL)
+        .addScaledVector(down, (r - (N - 1) / 2) * CELL);
       const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(0.52, 0.52, 0.09),
+        new THREE.BoxGeometry(PLATE, PLATE, PLATE_DEPTH),
         new THREE.MeshStandardMaterial({ color: 0x222, roughness: 0.55, metalness: 0.05 }),
       );
       mesh.position.copy(pos);
@@ -82,9 +87,9 @@ function timeline() { return solves[cur]?.timeline || []; }
 function setStickers(facelets) {
   const s = String(facelets || '');
   for (let f = 0; f < 6; f++) {
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 3; c++) {
-        const ch = s[f * 9 + r * 3 + c] || '?';
+    for (let r = 0; r < N; r++) {
+      for (let c = 0; c < N; c++) {
+        const ch = s[f * N * N + r * N + c] || '?';
         stickers[f][r][c].material.color.setHex(COLORS[ch] ?? 0x333333);
       }
     }
@@ -215,6 +220,7 @@ function resize() {
   if (w === 0 || h === 0) return;
   renderer.setSize(w, h);
   camera.aspect = w / h;
+
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(el('scene'));

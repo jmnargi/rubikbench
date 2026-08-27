@@ -81,6 +81,8 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-turns", type=int, default=None, help="turn budget per solve (overrides RUBIKBENCH_MAX_TURNS)")
     parser.add_argument("--scramble-len", type=int, default=None, help="scramble length (overrides RUBIKBENCH_SCRAMBLE_LEN)")
     parser.add_argument("--seed", type=int, default=None, help="fixed scramble seed (overrides RUBIKBENCH_SEED)")
+    parser.add_argument("--cube-size", type=int, choices=(2, 3), default=None,
+                        help="cube size: 3 = 3x3x3 (default), 2 = 2x2x2 (overrides RUBIKBENCH_CUBE_SIZE)")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -162,6 +164,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "output_token_reserve": args.output_token_reserve,
         "protocol_mode": args.protocol_mode,
         "presentation_mode": args.presentation_mode,
+        "cube_size": args.cube_size,
         "scramble_preset": args.scramble_preset,
         "max_input_tokens": args.max_input_tokens,
         "max_output_tokens": args.max_output_tokens,

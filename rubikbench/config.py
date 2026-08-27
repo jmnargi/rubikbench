@@ -84,6 +84,8 @@ class BenchmarkConfig:
     protocol_mode: str = "tool_only"
     #: Sticker is the spatial benchmark; cubie-v1 is an explicitly labeled view.
     presentation_mode: str = "stickers-v1"
+    #: 3 = regular 3x3x3 cube; 2 = pocket 2x2x2 cube.
+    cube_size: int = 3
     #: Named run profile; explicit values remain authoritative.
     profile: str = "full"
     #: Custom scrambles file list (used when ``scramble_preset == "file"``).
@@ -138,6 +140,10 @@ class BenchmarkConfig:
             raise ValueError("protocol_mode must be 'tool_only' or 'text_compat'")
         if self.presentation_mode not in ("stickers-v1", "cubie-v1"):
             raise ValueError("presentation_mode must be 'stickers-v1' or 'cubie-v1'")
+        if self.cube_size not in (2, 3):
+            raise ValueError("cube_size must be 2 or 3")
+        if self.cube_size == 2 and self.presentation_mode == "cubie-v1":
+            raise ValueError("presentation_mode 'cubie-v1' is not supported for cube_size 2")
         if self.profile not in RUN_PROFILES:
             raise ValueError(f"profile must be one of: {', '.join(RUN_PROFILES)}")
         if self.max_output_tokens is not None and self.max_output_tokens < 1:
@@ -358,6 +364,7 @@ _ENV_KNOBS: dict[str, tuple[str, Any]] = {
     "RUBIKBENCH_TOP_P": ("top_p", float),
     "RUBIKBENCH_REPETITION_PENALTY": ("repetition_penalty", float),
     "RUBIKBENCH_TOP_K": ("top_k", int),
+    "RUBIKBENCH_CUBE_SIZE": ("cube_size", int),
     "RUBIKBENCH_STREAM_IDLE_TIMEOUT": ("stream_idle_timeout", float),
 }
 

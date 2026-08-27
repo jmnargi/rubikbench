@@ -1,6 +1,6 @@
 # RubikBench
 
-RubikBench measures how well a large language model (LLM) solves a 3x3x3 Rubik's cube.
+RubikBench measures how well a large language model (LLM) solves a Rubik's cube. The default cube is the 3x3x3 cube. RubikBench also supports the 2x2x2 (pocket) cube.
 
 The model uses tools to make cube moves. Each message includes the current cube state. The benchmark runs without manual steps. It connects to any OpenAI-compatible endpoint.
 
@@ -20,6 +20,7 @@ RubikBench includes a Textual terminal user interface (TUI). The TUI has three s
 | Extra body parameters | JSON values that RubikBench sends with each chat-completion request. |
 | Max input tokens | A legacy optional override for the input budget. When set, RubikBench removes older conversation turns when needed to stay below the limit. |
 | Move | One face turn of the cube, such as `R` or `U'`. |
+| Cube size | The cube used by the benchmark. `3` is the 3x3x3 default. `2` selects the 2x2x2 (pocket) cube. |
 | Output cap | The maximum tokens in one model reply. RubikBench sends this value as `max_tokens` in the request body. RubikBench reserves output tokens from the context window. |
 | Par | The reference number of moves for a solution. |
 | Presentation mode | The cube-state format that RubikBench sends to the model. `stickers-v1` is the default. `cubie-v1` uses structured piece identities and numeric orientations. |
@@ -226,6 +227,7 @@ Without a config file, RubikBench uses the OpenAI endpoint and model by default.
 | `RUBIKBENCH_MAX_TURNS` | Turn budget for each solve. |
 | `RUBIKBENCH_SCRAMBLE_LEN` | Scramble length. |
 | `RUBIKBENCH_SEED` | Fixed scramble seed for reproducible runs. |
+| `RUBIKBENCH_CUBE_SIZE` | Cube size: `2` or `3`. A blank value uses the config file or the default 3. |
 
 If a config file exists, environment values take precedence for the base URL, model, and API key. Other values come from the config file.
 
@@ -266,9 +268,23 @@ The new run flags are:
 - `--output-token-reserve N`: tokens reserved for output while RubikBench budgets the input.
 - `--protocol-mode {tool_only,text_compat}`: the move protocol. `tool_only` is the benchmark default.
 - `--presentation-mode {stickers-v1,cubie-v1}`: the cube-state presentation schema.
+- `--cube-size {2,3}`: the cube size. `3` is the default 3x3x3 cube. `2` selects the 2x2x2 cube.
 - `--scramble-preset NAME`: a premade benchmark set, including the versioned ladder fixtures.
 
 The older `--max-input-tokens` flag remains a legacy optional override for the input budget.
+
+### 2x2 cube mode
+
+RubikBench can also benchmark the 2x2x2 (pocket) cube. This mode is optional. The default cube size is 3.
+
+Select the cube size with the CLI flag or the environment variable:
+
+- `--cube-size 2` selects the 2x2x2 cube. `--cube-size 3` (the default) selects the 3x3x3 cube.
+- `RUBIKBENCH_CUBE_SIZE=2` selects the 2x2x2 cube when you run from `.env`. The CLI flag takes precedence over the environment variable.
+
+The 2x2x2 cube uses the same 18 legal face moves (`U`, `D`, `L`, `R`, `F`, `B` with an optional `'` or `2`). RubikBench rejects every other move token. An illegal move can never change the cube. RubikBench validates the cube size and the facelet state before every run.
+
+For scoring, the 2x2x2 reference par comes from the built-in 2x2 solver. God's number for the 2x2x2 cube is 14 moves in the half-turn metric. The `cubie-v1` presentation mode is not supported on the 2x2x2 cube.
 
 ```bash
 uv run rubikbench run \

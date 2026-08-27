@@ -1,8 +1,9 @@
-"""3x3x3 Rubik's cube model.
+"""Rubik's cube model for 2x2x2 and 3x3x3 cubes.
 
-Facelet representation with an internal layout identical to Kociemba's solver:
-54 facelets, faces in order U R F D L B (indices ``face*9 + row*3 + col``), each
-face printed in the classic cross net::
+Facelet representation: 6 faces in Kociemba order U R F D L B, each face an
+``n x n`` grid (``n = size``), so a 3x3x3 cube has 54 facelets and a 2x2x2
+cube has 24. For 3x3x3 the internal layout matches Kociemba's solver; the
+printed net is the classic cross::
 
             U0 U1 U2
             U3 U4 U5
@@ -17,7 +18,12 @@ face printed in the classic cross net::
 The face-turn permutation tables are derived *geometrically*: each facelet is
 assigned a 3D position on a unit cube, a move rotates the stickers of its layer
 about the face normal, and the resulting positions are mapped back to facelets.
-This avoids hand-written permutation tables (and the errors that come with them).
+This avoids hand-written permutation tables (and the errors that come with
+them) and works for any face count ``n >= 2``.
+
+Only the 18 legal Singmaster face turns exist (``U R F D L B`` with ``'`` and
+``2`` suffixes). There is no code path that can apply a different turn: a
+2x2x2 and a 3x3x3 cube have exactly the same 18 legal face turns.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 FACES = "URFDLB"
 
@@ -50,27 +57,34 @@ _FRAME: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]]
 
 _FACE_AT_AXIS = {0: {"+": "R", "-": "L"}, 1: {"+": "F", "-": "B"}, 2: {"+": "U", "-": "D"}}
 
-_CELL = 2.0 / 3.0  # facelet center offset on the unit cube
+_SUPPORTED_SIZES = (2, 3)
 
 
-def _sticker_positions() -> dict[int, tuple[float, float, float]]:
+def _step(size: int) -> float:
+    return 2.0 / size
+
+
+def _sticker_positions(size: int) -> dict[int, tuple[float, float, float]]:
     """Facelet index -> 3D position of its center on the [-1, 1]^3 cube."""
+    step = _step(size)
     pos: dict[int, tuple[float, float, float]] = {}
     for fi, face in enumerate(FACES):
-        n = _NORMALS[face]
+        normal = _NORMALS[face]
         r_ax, d_ax = _FRAME[face]
-        for row in range(3):
-            for col in range(3):
-                idx = fi * 9 + row * 3 + col
+        for row in range(size):
+            for col in range(size):
+                idx = fi * size * size + row * size + col
+                dc = (col - (size - 1) / 2) * step
+                dr = (row - (size - 1) / 2) * step
                 pos[idx] = (
-                    n[0] + (col - 1) * _CELL * r_ax[0] + (row - 1) * _CELL * d_ax[0],
-                    n[1] + (col - 1) * _CELL * r_ax[1] + (row - 1) * _CELL * d_ax[1],
-                    n[2] + (col - 1) * _CELL * r_ax[2] + (row - 1) * _CELL * d_ax[2],
+                    normal[0] + dc * r_ax[0] + dr * d_ax[0],
+                    normal[1] + dc * r_ax[1] + dr * d_ax[1],
+                    normal[2] + dc * r_ax[2] + dr * d_ax[2],
                 )
     return pos
 
 
-_POSITIONS = _sticker_positions()
+_POSITIONS = _sticker_positions(3)
 
 
 def _rotate(v: tuple[float, float, float], axis: tuple[float, float, float], theta_deg: float) -> tuple[float, float, float]:
@@ -90,8 +104,8 @@ def _rotate(v: tuple[float, float, float], axis: tuple[float, float, float], the
     )
 
 
-def _index_at(pos: tuple[float, float, float]) -> int:
-    """Map a 3D position back to its facelet index."""
+def _index_at(pos: tuple[float, float, float], size: int) -> int:
+    """Map a 3D position back to its facelet index (nearest-sticker mapping)."""
     axis = max(range(3), key=lambda i: abs(pos[i]))
     face = _FACE_AT_AXIS[axis]["+" if pos[axis] > 0 else "-"]
     fi = FACES.index(face)
@@ -100,33 +114,44 @@ def _index_at(pos: tuple[float, float, float]) -> int:
     off = (pos[0] - normal[0], pos[1] - normal[1], pos[2] - normal[2])
     dc = off[0] * r_ax[0] + off[1] * r_ax[1] + off[2] * r_ax[2]
     dr = off[0] * d_ax[0] + off[1] * d_ax[1] + off[2] * d_ax[2]
-    col = min(2, max(0, round(dc / _CELL) + 1))
-    row = min(2, max(0, round(dr / _CELL) + 1))
-    return fi * 9 + row * 3 + col
+    step = _step(size)
+
+    def nearest(d: float) -> int:
+        best = 0
+        best_dist = abs(d - (0 - (size - 1) / 2) * step)
+        for c in range(1, size):
+            dist = abs(d - (c - (size - 1) / 2) * step)
+            if dist < best_dist - 1e-12:
+                best, best_dist = c, dist
+        return best
+
+    return fi * size * size + nearest(dr) * size + nearest(dc)
 
 
-def _build_perm(face: str, angle: float) -> tuple[int, ...]:
+def _build_perm(face: str, angle: float, size: int) -> tuple[int, ...]:
     """Build a permutation table ``perm[i] == j`` meaning ``after[i] = before[j]``."""
     normal = _NORMALS[face]
-    perm = list(range(54))
-    for j, p in _POSITIONS.items():
-        in_layer = p[0] * normal[0] + p[1] * normal[1] + p[2] * normal[2] > 0.5
+    positions = _sticker_positions(size)
+    total = size * size * 6
+    perm = list(range(total))
+    for j, p in positions.items():
+        in_layer = p[0] * normal[0] + p[1] * normal[1] + p[2] * normal[2] >= 0.5 - 1e-9
         if in_layer:
             rotated = _rotate(p, normal, angle)
-            perm[_index_at(rotated)] = j
+            perm[_index_at(rotated, size)] = j
     return tuple(perm)
 
 
 def _compose(a: tuple[int, ...], b: tuple[int, ...]) -> tuple[int, ...]:
     """Permutation composition: apply `b` first, then `a`."""
-    return tuple(a[b[i]] for i in range(54))
+    return tuple(a[b[i]] for i in range(len(a)))
 
 
-def _build_moves() -> dict[str, tuple[int, ...]]:
+def _build_moves(size: int) -> dict[str, tuple[int, ...]]:
     moves: dict[str, tuple[int, ...]] = {}
     for face in FACES:
-        cw = _build_perm(face, 90.0)    # clockwise when viewed at the face
-        ccw = _build_perm(face, -90.0)
+        cw = _build_perm(face, 90.0, size)    # clockwise when viewed at the face
+        ccw = _build_perm(face, -90.0, size)
         double = _compose(cw, cw)
         moves[face] = cw
         moves[face + "'"] = ccw
@@ -134,9 +159,20 @@ def _build_moves() -> dict[str, tuple[int, ...]]:
     return moves
 
 
-MOVES: dict[str, tuple[int, ...]] = _build_moves()
+_MOVES_BY_SIZE: dict[int, dict[str, tuple[int, ...]]] = {3: _build_moves(3)}
 
-#: All 18 legal Singmaster face turns.
+
+def moves_for(size: int) -> dict[str, tuple[int, ...]]:
+    """The 18 move permutation tables for a cube of `size` (cached)."""
+    if size not in _MOVES_BY_SIZE:
+        _MOVES_BY_SIZE[size] = _build_moves(size)
+    return _MOVES_BY_SIZE[size]
+
+
+#: Backward-compatible alias: the 3x3x3 tables (54 facelets).
+MOVES: dict[str, tuple[int, ...]] = _MOVES_BY_SIZE[3]
+
+#: All 18 legal Singmaster face turns. Identical for 2x2x2 and 3x3x3.
 ALL_MOVES: list[str] = [f + suffix for f in "URFDLB" for suffix in ("", "'", "2")]
 
 _TOKEN_RE = re.compile(r"^[URFDLB][2']?$")
@@ -145,14 +181,16 @@ _TOKEN_RE = re.compile(r"^[URFDLB][2']?$")
 def parse_moves(text: str) -> tuple[list[str], list[str]]:
     """Parse whitespace-separated Singmaster moves from `text`.
 
-    Returns ``(valid, invalid)``. Case-insensitive; unknown tokens are reported
-    as invalid rather than raising.
+    Returns ``(valid, invalid)``. Case-insensitive; unknown tokens (including
+    slice or middle-layer moves such as ``M``, ``E``, ``S``, ``u``, ``Uw``)
+    are reported as invalid rather than raising. Only face turns ``U D L R F B``
+    with an optional ``'`` or ``2`` suffix are ever accepted, for any cube size.
     """
     valid: list[str] = []
     invalid: list[str] = []
     for raw in text.split():
         tok = raw.strip().upper()
-        if _TOKEN_RE.match(tok) and tok in MOVES:
+        if _TOKEN_RE.match(tok) and tok in ALL_MOVES:
             valid.append(tok)
         else:
             invalid.append(raw)
@@ -162,9 +200,19 @@ def parse_moves(text: str) -> tuple[list[str], list[str]]:
 def moves_to_string(moves: list[str]) -> str:
     return " ".join(moves)
 
-# Kociemba's position order and facelet indices.  Piece identities are their
-# solved color names; orientation is the standard cubie orientation at the
-# current position.
+
+def solved_facelets(size: int) -> list[str]:
+    """The solved facelet list for a cube of `size` (e.g. 24 for 2, 54 for 3)."""
+    return list("".join(f * size * size for f in FACES))
+
+
+#: Backward-compatible alias: the 3x3x3 solved state.
+SOLVED_FACELETS = solved_facelets(3)
+
+
+# Kociemba's position order and facelet indices (3x3x3 only). Piece identities
+# are their solved color names; orientation is the standard cubie orientation
+# at the current position.
 _CORNER_NAMES = ("URF", "UFL", "ULB", "UBR", "DFR", "DLF", "DBL", "DRB")
 _CORNER_FACELETS = (
     (8, 9, 20), (6, 18, 38), (0, 36, 47), (2, 45, 11),
@@ -178,31 +226,50 @@ _EDGE_FACELETS = (
 )
 _EDGE_COLORS = tuple(tuple(name) for name in _EDGE_NAMES)
 
-SOLVED_FACELETS = list("".join(f * 9 for f in FACES))
-
 
 @dataclass
 class Cube:
-    """Mutable cube state plus a record of every move applied to it."""
+    """Mutable cube state plus a record of every move applied to it.
+
+    ``size`` is the face count (2 or 3); ``facelets`` has ``6 * size * size``
+    entries. Any attempt to build a cube whose facelet count does not match its
+    size raises ValueError.
+    """
 
     facelets: list[str] = field(default_factory=lambda: list(SOLVED_FACELETS))
     history: list[str] = field(default_factory=list)
     scramble: list[str] = field(default_factory=list)
+    size: int = 3
+
+    def __post_init__(self) -> None:
+        expected = 6 * self.size * self.size
+        if len(self.facelets) != expected:
+            raise ValueError(
+                f"size {self.size} cube needs {expected} facelets, got {len(self.facelets)}"
+            )
+        if self.size not in _SUPPORTED_SIZES:
+            raise ValueError(f"unsupported cube size: {self.size} (use 2 or 3)")
 
     @classmethod
-    def solved(cls) -> Cube:
-        return cls(list(SOLVED_FACELETS))
+    def solved(cls, size: int = 3) -> Cube:
+        return cls(list(solved_facelets(size)), size=size)
 
     def reset_to_scramble(self) -> None:
-        self.facelets = list(SOLVED_FACELETS)
+        self.facelets = list(solved_facelets(self.size))
+        tables = moves_for(self.size)
         for m in self.scramble:
-            self.facelets = [self.facelets[p] for p in MOVES[m]]
+            self.facelets = [self.facelets[p] for p in tables[m]]
         self.history = []
 
     def apply(self, moves: list[str], record: bool = True) -> None:
-        """Apply validated move tokens in sequence."""
+        """Apply validated move tokens in sequence.
+
+        Only the 18 legal face turns are known to the move tables; any other
+        token raises KeyError, so an illegal move can never alter the state.
+        """
+        tables = moves_for(self.size)
         for m in moves:
-            perm = MOVES[m]
+            perm = tables[m]
             self.facelets = [self.facelets[p] for p in perm]
             if record:
                 self.history.append(m)
@@ -214,10 +281,11 @@ class Cube:
         return valid, invalid
 
     def is_solved(self) -> bool:
+        per_face = self.size * self.size
         for fi in range(6):
-            base = fi * 9
+            base = fi * per_face
             color = self.facelets[base]
-            for i in range(base + 1, base + 9):
+            for i in range(base + 1, base + per_face):
                 if self.facelets[i] != color:
                     return False
         return True
@@ -226,12 +294,14 @@ class Cube:
         return "".join(self.facelets)
 
     def copy(self) -> Cube:
-        c = Cube(list(self.facelets), list(self.history), list(self.scramble))
+        c = Cube(list(self.facelets), list(self.history), list(self.scramble), size=self.size)
         return c
 
-    def cubie_state(self) -> dict[str, object]:
-        """Derived Kociemba-style cubie inventory for this facelet state."""
-        corners: list[dict[str, object]] = []
+    def cubie_state(self) -> dict[str, Any]:
+        """Derived Kociemba-style cubie inventory (defined for 3x3x3 only)."""
+        if self.size != 3:
+            raise ValueError("cubie state is only defined for a 3x3x3 cube")
+        corners: list[dict[str, Any]] = []
         for position, indices in zip(_CORNER_NAMES, _CORNER_FACELETS, strict=True):
             colors = tuple(self.facelets[index] for index in indices)
             orientation = next(i for i, color in enumerate(colors) if color in "UD")
@@ -245,7 +315,7 @@ class Cube:
                 {"position": position, "piece": identity, "orientation": orientation}
             )
 
-        edges: list[dict[str, object]] = []
+        edges: list[dict[str, Any]] = []
         for position, indices in zip(_EDGE_NAMES, _EDGE_FACELETS, strict=True):
             colors = tuple(self.facelets[index] for index in indices)
             identity = orientation = None
