@@ -43,9 +43,18 @@ def _add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-input-tokens", type=int, default=None, help="context cap (overrides RUBIKBENCH_MAX_INPUT_TOKENS)")
     parser.add_argument("--max-output-tokens", type=int, default=None, help="sent as max_tokens (overrides RUBIKBENCH_MAX_OUTPUT_TOKENS)")
     parser.add_argument(
-        "--no-stream-options",
+        "--stream-options",
+        dest="stream_options",
         action="store_true",
-        help="omit stream_options.include_usage (use if your proxy buffers the stream)",
+        default=None,
+        help="force stream_options.include_usage on (default: auto; on for OpenAI only)",
+    )
+    parser.add_argument(
+        "--no-stream-options",
+        dest="stream_options",
+        action="store_false",
+        default=None,
+        help="force stream_options.include_usage off (use if your proxy buffers the stream)",
     )
     parser.add_argument("--temperature", type=float, default=None, help="sampling temperature (overrides RUBIKBENCH_TEMPERATURE)")
     parser.add_argument("--timeout", type=float, default=None, help="request timeout in seconds (overrides RUBIKBENCH_TIMEOUT)")
@@ -140,8 +149,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "seed": args.seed,
     }
     overrides = {k: v for k, v in cli_overrides.items() if v is not None}
-    if args.no_stream_options:
-        overrides["include_stream_options"] = False
+    if args.stream_options is not None:
+        overrides["include_stream_options"] = args.stream_options
     if overrides:
         cfg = replace(cfg, **overrides)
         try:

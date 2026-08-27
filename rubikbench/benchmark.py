@@ -349,7 +349,10 @@ def run_solve(
         })
         _emit(emitter, "turn", index=index, turn=turns, content=turn.content,
               reasoning=turn.reasoning,
-              tool_call_names=[tc.name for tc in turn.tool_calls], latency=turn.latency)
+              tool_call_names=[tc.name for tc in turn.tool_calls], latency=turn.latency,
+              prompt_tokens=turn.prompt_tokens, completion_tokens=turn.completion_tokens,
+              reasoning_tokens=turn.reasoning_tokens, cached_tokens=turn.cached_tokens,
+              total_tokens=turn.total_tokens)
 
         assistant_msg: dict[str, Any] = {"role": "assistant"}
         if turn.content:

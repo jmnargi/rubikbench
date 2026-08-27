@@ -54,9 +54,10 @@ class BenchmarkConfig:
     #: are trimmed to stay below this value; ``None`` disables trimming.
     max_input_tokens: int | None = None
     #: Whether to request per-stream usage via ``stream_options.include_usage``.
-    #: Some LiteLLM proxies and gateways buffer the stream when this is enabled,
-    #: so it can be disabled with ``--no-stream-options``.
-    include_stream_options: bool = True
+    #: ``None`` means "auto": enabled only for the official OpenAI endpoint,
+    #: disabled for every other base URL (many LiteLLM proxies buffer the stream
+    #: when this is on). Override with ``--stream-options`` / ``--no-stream-options``.
+    include_stream_options: bool | None = None
 
     # --- Benchmark ---------------------------------------------------------
     num_solves: int = 5
@@ -323,7 +324,11 @@ def apply_env_overrides(cfg: BenchmarkConfig) -> BenchmarkConfig:
             overrides[field_name] = cast(raw)
         except ValueError as exc:
             raise ValueError(f"{env_name} must be a number, got {raw!r}") from exc
-    if os.environ.get("RUBIKBENCH_NO_STREAM_OPTIONS", "").lower() in ("1", "true", "yes"):
+    stream_opt = os.environ.get("RUBIKBENCH_STREAM_OPTIONS", "").lower()
+    no_stream_opt = os.environ.get("RUBIKBENCH_NO_STREAM_OPTIONS", "").lower()
+    if stream_opt in ("1", "true", "yes"):
+        overrides["include_stream_options"] = True
+    elif no_stream_opt in ("1", "true", "yes"):
         overrides["include_stream_options"] = False
     return replace(cfg, **overrides)
 

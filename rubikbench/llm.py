@@ -45,6 +45,7 @@ class AssistantTurn:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int = 0
     cached_tokens: int = 0
     total_tokens: int = 0
     finish_reason: str | None = None
@@ -74,7 +75,7 @@ class OpenAICompatibleClient:
         stream: bool = False,
         temperature: float | None = None,
         max_output_tokens: int | None = None,
-        include_stream_options: bool = True,
+        include_stream_options: bool | None = None,
         extra_body: dict[str, Any] | None = None,
         tool_choice: str = "auto",
     ) -> None:
@@ -119,11 +120,17 @@ class OpenAICompatibleClient:
             # Standard OpenAI-compatible parameter; LiteLLM proxies and vLLM
             # accept ``max_tokens`` at the top level (not inside extra_body).
             kwargs["max_tokens"] = self._max_output_tokens
-        if self._stream and self._include_stream_options:
-            # Ask the server to include usage in the stream so live token counts
-            # can be shown. Some gateways buffer the whole response when this
-            # is set, so ``--no-stream-options`` lets you disable it.
-            kwargs.setdefault("stream_options", {"include_usage": True})
+        if self._stream:
+            # Avoid HTTP/gateway buffering of SSE responses.
+            kwargs["extra_headers"] = {"Cache-Control": "no-cache"}
+            # By default only OpenAI's own endpoint is known to handle
+            # stream_options without buffering custom LiteLLM proxies. Everywhere
+            # else we leave it off unless explicitly enabled.
+            use_stream_options = self._include_stream_options
+            if use_stream_options is None:
+                use_stream_options = "api.openai.com" in (self._base_url or "")
+            if use_stream_options:
+                kwargs.setdefault("stream_options", {"include_usage": True})
 
         started = time.monotonic()
         self._request_started = started
@@ -141,9 +148,9 @@ class OpenAICompatibleClient:
         return turn
 
     @staticmethod
-    def _usage_fields(usage: Any) -> tuple[int, int, int, int]:
-        """(prompt, completion, cached, total) tokens from OpenAI or Anthropic-style usage."""
-        prompt = completion = cached = total = 0
+    def _usage_fields(usage: Any) -> tuple[int, int, int, int, int]:
+        """(prompt, completion, reasoning, cached, total) tokens from OpenAI-style usage."""
+        prompt = completion = reasoning = cached = total = 0
         if usage is not None:
             prompt = getattr(usage, "prompt_tokens", 0) or 0
             completion = getattr(usage, "completion_tokens", 0) or 0
@@ -153,7 +160,10 @@ class OpenAICompatibleClient:
                 cached = getattr(details, "cached_tokens", 0) or 0
             else:
                 cached = getattr(usage, "cache_read_input_tokens", 0) or 0  # Anthropic style
-        return prompt, completion, cached, total
+            completion_details = getattr(usage, "completion_tokens_details", None)
+            if completion_details is not None:
+                reasoning = getattr(completion_details, "reasoning_tokens", 0) or 0
+        return prompt, completion, reasoning, cached, total
 
     # -- internals ----------------------------------------------------------
     def _complete_stream(
@@ -171,9 +181,13 @@ class OpenAICompatibleClient:
         seen_payload = False
         stream = self._client.chat.completions.create(stream=True, **kwargs)
         for chunk in stream:
-            prompt_tokens, completion_tokens, cached_tokens, total_tokens = self._usage_fields(
-                getattr(chunk, "usage", None) or None
-            )
+            (
+                prompt_tokens,
+                completion_tokens,
+                reasoning_tokens,
+                cached_tokens,
+                total_tokens,
+            ) = self._usage_fields(getattr(chunk, "usage", None) or None)
             delta_content: str | None = None
             delta_reasoning: str | None = None
             tool_deltas_out: list[dict[str, Any]] = []
@@ -236,6 +250,7 @@ class OpenAICompatibleClient:
                     "usage": {
                         "prompt": prompt_tokens,
                         "completion": completion_tokens,
+                        "reasoning": reasoning_tokens,
                         "cached": cached_tokens,
                         "total": total_tokens,
                     },
@@ -259,6 +274,7 @@ class OpenAICompatibleClient:
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
             cached_tokens=cached_tokens,
             total_tokens=total_tokens,
             finish_reason=finish_reason,
@@ -294,15 +310,20 @@ class OpenAICompatibleClient:
                     raw=raw,
                 )
             )
-        prompt_tokens, completion_tokens, cached_tokens, total_tokens = self._usage_fields(
-            getattr(response, "usage", None)
-        )
+        (
+            prompt_tokens,
+            completion_tokens,
+            reasoning_tokens,
+            cached_tokens,
+            total_tokens,
+        ) = self._usage_fields(getattr(response, "usage", None))
         return AssistantTurn(
             content=content,
             reasoning=reasoning,
             tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
             cached_tokens=cached_tokens,
             total_tokens=total_tokens,
             finish_reason=finish_reason,

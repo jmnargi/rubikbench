@@ -62,6 +62,7 @@ class TurnMsg(Message):
         reasoning: str | None = None,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        reasoning_tokens: int = 0,
         cached_tokens: int = 0,
         total_tokens: int = 0,
     ) -> None:
@@ -73,6 +74,7 @@ class TurnMsg(Message):
         self.reasoning = reasoning
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
+        self.reasoning_tokens = reasoning_tokens
         self.cached_tokens = cached_tokens
         self.total_tokens = total_tokens
 

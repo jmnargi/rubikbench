@@ -13,7 +13,7 @@ import json
 import threading
 import time
 from datetime import datetime, timezone
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from rich.markup import escape
 from textual import on
@@ -21,7 +21,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Footer, Label, ProgressBar, Static
+from textual.widgets import Footer, Label, Static
 
 from ..benchmark import BenchmarkResult, BenchmarkRunner
 from ..config import BenchmarkConfig, api_key_from_env
@@ -48,7 +48,7 @@ class RunScreen(Screen):
 
     CSS = """
     #run-body { height: 1fr; padding: 0 1; }
-    #left-col { width: 46; }
+    #left-col { width: 54; }
     .card { border: round $panel; padding: 0 1 1 1; margin: 0 0 1 0; }
     .card-title { text-style: bold; }
     #cube-net { width: auto; height: auto; }
@@ -57,7 +57,6 @@ class RunScreen(Screen):
     #info-grid Label { width: 1fr; }
     .info-label { text-style: dim; }
     #stats-grid { height: auto; grid-size: 2; grid-columns: 1fr 1fr; }
-    #run-progress { height: 1; margin: 0 0 1 0; }
     #run-status { height: 1; content-align: left middle; }
     #model-scroll { height: 1fr; border: round $panel; padding: 0 1; }
     #history-text { width: 1fr; }
@@ -88,12 +87,14 @@ class RunScreen(Screen):
         self._wait_attempt = 1
         self._spinner = 0
 
-        # Run-wide counters (from stream usage + turn results).
+        # Run-wide counters (from API usage, using delta math so cumulative
+        # usage reported by some proxies does not double-count).
         self._tok_in = 0
         self._tok_out = 0
+        self._tok_reasoning = 0
         self._tok_cached = 0
         self._tok_total = 0
-        self._usage_turns_added: set[int] = set()
+        self._usage_by_turn: dict[int, dict[str, int]] = {}
 
         self._solve_started = time.monotonic()
         self._stats_timer = None
@@ -134,6 +135,8 @@ class RunScreen(Screen):
                         yield Label("0", id="st-tok-in")
                         yield Label("Tokens out")
                         yield Label("0", id="st-tok-out")
+                        yield Label("Reasoning")
+                        yield Label("0", id="st-reasoning")
                         yield Label("Cached")
                         yield Label("0", id="st-tok-cached")
                         yield Label("Elapsed")
@@ -142,7 +145,6 @@ class RunScreen(Screen):
                         yield Label("—", id="st-speed")
                         yield Label("Score")
                         yield Label("—", id="st-score")
-                yield ProgressBar(id="run-progress", total=self.config.num_solves, show_eta=False)
                 yield Static("", id="run-status")
             # One tall pane: the whole model conversation, live.
             with VerticalScroll(id="model-scroll"):
@@ -206,6 +208,7 @@ class RunScreen(Screen):
                 payload["latency"], payload.get("reasoning"),
                 payload.get("prompt_tokens", 0),
                 payload.get("completion_tokens", 0),
+                payload.get("reasoning_tokens", 0),
                 payload.get("cached_tokens", 0),
                 payload.get("total_tokens", 0),
             ))
@@ -249,6 +252,18 @@ class RunScreen(Screen):
                 lines.append(rendered)
         self.query_one("#history-text", Static).update("\n".join(lines))
 
+    def _render_tool_call(self, name: str, arguments: dict[str, Any] | None, idx: int | None = None) -> str:
+        if arguments:
+            # Show each kwarg as name="value" on one clean line.
+            rendered = ", ".join(
+                f"{escape(k)}={escape(json.dumps(v, ensure_ascii=False))}"
+                for k, v in arguments.items()
+            )
+        else:
+            rendered = ""
+        prefix = f"tool {idx + 1}: " if idx is not None else ""
+        return f"[bright_black]{prefix}[/bright_black][bold cyan]{escape(name)}[/bold cyan]({rendered})"
+
     def _render_live(self) -> str:
         parts: list[str] = []
         if self._live_reasoning and self._show_reasoning:
@@ -257,12 +272,11 @@ class RunScreen(Screen):
             parts.append(f"[white]{escape(self._live_content)}[/]")
         for idx in sorted(self._live_tool_slots):
             slot = self._live_tool_slots[idx]
-            name = slot["name"] or "…"
-            args = slot["args"] or "…"
-            parts.append(
-                f"[bright_black]→ tool {idx + 1}:[/bright_black] "
-                f"[bold cyan]{escape(name)}[/bold cyan]({escape(args)})"
-            )
+            try:
+                args = json.loads(slot["args"]) if slot["args"] else None
+            except json.JSONDecodeError:
+                args = {"_unparsed": slot["args"]}
+            parts.append(self._render_tool_call(slot["name"] or "…", args, idx))
         return "\n".join(parts)
 
     def _update_live(self) -> None:
@@ -270,22 +284,49 @@ class RunScreen(Screen):
         self._scroll_model()
 
     def _add_usage(self, turn: int, usage: dict[str, int] | None) -> None:
-        """Add usage once per turn (stream chunk or turn summary)."""
-        if not usage or turn in self._usage_turns_added:
+        """Add usage with delta math; some proxies report cumulative per-chunk totals."""
+        if not usage:
             return
         prompt = usage.get("prompt", 0)
         completion = usage.get("completion", 0)
+        reasoning = usage.get("reasoning", 0)
         cached = usage.get("cached", 0)
         total = usage.get("total", 0)
-        if prompt == 0 and completion == 0 and cached == 0 and total == 0:
+        if prompt == 0 and completion == 0 and cached == 0 and total == 0 and reasoning == 0:
             return
-        self._usage_turns_added.add(turn)
-        self._tok_in += prompt
-        self._tok_out += completion
-        self._tok_cached += cached
-        self._tok_total += total
+
+        prev = self._usage_by_turn.get(turn, {})
+        prev_prompt = prev.get("prompt", 0)
+        prev_completion = prev.get("completion", 0)
+        prev_reasoning = prev.get("reasoning", 0)
+        prev_cached = prev.get("cached", 0)
+        prev_total = prev.get("total", 0)
+
+        delta_prompt = max(0, prompt - prev_prompt)
+        delta_completion = max(0, completion - prev_completion)
+        delta_reasoning = max(0, reasoning - prev_reasoning)
+        delta_cached = max(0, cached - prev_cached)
+        delta_total = max(0, total - prev_total)
+
+        # response tokens = completion minus reasoning (when the API separates them)
+        delta_response = max(0, delta_completion - delta_reasoning)
+
+        self._usage_by_turn[turn] = {
+            "prompt": prompt,
+            "completion": completion,
+            "reasoning": reasoning,
+            "cached": cached,
+            "total": total,
+        }
+
+        self._tok_in += delta_prompt
+        self._tok_out += delta_response
+        self._tok_reasoning += delta_reasoning
+        self._tok_cached += delta_cached
+        self._tok_total += delta_total
         self.query_one("#st-tok-in", Label).update(f"{self._tok_in:,}")
         self.query_one("#st-tok-out", Label).update(f"{self._tok_out:,}")
+        self.query_one("#st-reasoning", Label).update(f"{self._tok_reasoning:,}")
         self.query_one("#st-tok-cached", Label).update(f"{self._tok_cached:,}")
 
     def _scroll_model(self) -> None:
@@ -368,6 +409,7 @@ class RunScreen(Screen):
             {
                 "prompt": msg.prompt_tokens,
                 "completion": msg.completion_tokens,
+                "reasoning": msg.reasoning_tokens,
                 "cached": msg.cached_tokens,
                 "total": msg.total_tokens,
             },
@@ -381,9 +423,7 @@ class RunScreen(Screen):
 
     @on(ToolCallMsg)
     def _on_tool_call(self, msg: ToolCallMsg) -> None:
-        args = escape(json.dumps(msg.arguments, ensure_ascii=False) if msg.arguments else "{}")
-        icon = {"apply": "🔧", "reset": "↺"}.get(msg.action, "→")
-        self._append_history("tool", f"{icon} [bold cyan]{escape(msg.name)}[/bold cyan]({args})")
+        self._append_history("tool", self._render_tool_call(msg.name, msg.arguments))
 
     @on(ToolResultMsg)
     def _on_tool_result(self, msg: ToolResultMsg) -> None:
@@ -406,7 +446,6 @@ class RunScreen(Screen):
     @on(SolveDoneMsg)
     def _on_solve_done(self, msg: SolveDoneMsg) -> None:
         self.completed += 1
-        self.query_one("#run-progress", ProgressBar).advance(1)
         s = msg.solve
         status = "SOLVED" if s.solved else ("FAILED" if s.error else "UNSOLVED")
         color = "green" if s.solved else "red"
