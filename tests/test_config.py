@@ -33,6 +33,16 @@ def test_roundtrip_dict():
     assert restored == cfg
 
 
+def test_to_dict_omits_api_key_unless_credentials_requested():
+    cfg = BenchmarkConfig(base_url="http://x/v1", model="m", api_key="sk-super-secret")
+    exported = cfg.to_dict()
+    assert "api_key" not in exported
+    # The safe form must round-trip without the key.
+    assert BenchmarkConfig.from_dict(exported).api_key == ""
+    full = cfg.to_dict(include_credentials=True)
+    assert full["api_key"] == "sk-super-secret"
+
+
 def test_unknown_keys_ignored_and_extra_body_string_coerced():
     data = {
         "base_url": "http://x/v1",

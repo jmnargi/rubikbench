@@ -381,6 +381,62 @@ def test_export_jsonl_roundtrip(mock, tmp_path):
         assert "transcript" in solve
 
 
+def test_export_jsonl_header_logs_request_config_without_api_key(mock, tmp_path):
+    _, url = mock
+    secret = "sk-super-secret-not-for-export"
+    cfg = base_cfg(
+        base_url=url,
+        model="acme/bench-model-1",
+        api_key=secret,
+        temperature=0.42,
+        top_p=0.9,
+        context_window_tokens=16384,
+        max_output_tokens=2048,
+        output_token_reserve=4096,
+        max_input_tokens=65536,
+        extra_body={"vendor_knob": 7},
+        reasoning_effort="high",
+        cache_retention=3600,
+        repetition_penalty=1.1,
+        top_k=40,
+    )
+    result = BenchmarkRunner(cfg, make_client(url, model=cfg.model)).run()
+    out = export_jsonl(result, tmp_path / "run.jsonl")
+    text = out.read_text()
+
+    header = json.loads(text.splitlines()[0])
+    config = header["config"]
+    # model, endpoint, sampling, and budget settings are logged in the header.
+    assert config["model"] == "acme/bench-model-1"
+    assert config["base_url"] == url
+    assert config["temperature"] == 0.42
+    assert config["top_p"] == 0.9
+    assert config["context_window_tokens"] == 16384
+    assert config["max_output_tokens"] == 2048
+    assert config["output_token_reserve"] == 4096
+    assert config["max_input_tokens"] == 65536
+    assert config["extra_body"] == {"vendor_knob": 7}
+    # Every effective request-body param is recoverable from the header: the
+    # raw extra_body map plus the named field for each merged convenience knob.
+    field_for = {
+        "reasoning_effort": "reasoning_effort",
+        "prompt_cache_retention": "cache_retention",
+        "repetition_penalty": "repetition_penalty",
+        "top_k": "top_k",
+    }
+    for key, value in cfg.effective_extra_body().items():
+        field = field_for.get(key)
+        assert (field is not None and config.get(field) == value) or config["extra_body"].get(key) == value
+    assert config["reasoning_effort"] == "high"
+    assert config["cache_retention"] == 3600
+    assert config["repetition_penalty"] == 1.1
+    assert config["top_k"] == 40
+
+    # The API key never reaches the file, in the header or anywhere else.
+    assert "api_key" not in config
+    assert secret not in text
+
+
 # --------------------------------------------------------------------------- fake clients
 
 class FixedContentClient:

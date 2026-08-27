@@ -85,6 +85,53 @@ def test_write_dataset_round_trip(mock, tmp_path):
     assert loaded["solves"][0]["timeline"] == ds["solves"][0]["timeline"]
 
 
+def test_export_aggregate_replay_keep_request_config_but_never_the_key(mock, tmp_path):
+    _, url = mock
+    secret = "sk-super-secret-not-for-export"
+    cfg = BenchmarkConfig(
+        base_url=url, model="acme/bench-model-1", api_key=secret,
+        num_solves=1, max_turns=12, seed=7, temperature=0.3,
+        context_window_tokens=16384, extra_body={"reasoning_effort": "high"},
+        cache_retention=3600,
+    )
+    run = tmp_path / "run.jsonl"
+    result = BenchmarkRunner(cfg, OpenAICompatibleClient(
+        base_url=url, api_key=secret, model=cfg.model, max_retries=0,
+    )).run()
+    export_jsonl(result, run)
+
+    # JSONL header carries model/endpoint/sampling/ctx/extra body, no key.
+    config = read_run(run)[0]["config"]
+    assert config["model"] == "acme/bench-model-1"
+    assert config["base_url"] == url
+    assert config["temperature"] == 0.3
+    assert config["context_window_tokens"] == 16384
+    assert config["extra_body"] == {"reasoning_effort": "high"}
+    assert config["cache_retention"] == 3600
+    assert "api_key" not in config
+    assert secret not in run.read_text()
+
+    # Dataset JSON denormalizes the same metadata and stays key-free.
+    ds = aggregate_files([run])
+    assert ds["models"] == ["acme/bench-model-1"]
+    detail = ds["runs_detail"][0]
+    assert detail["base_url"] == url
+    assert detail["config"]["temperature"] == 0.3
+    assert detail["config"]["cache_retention"] == 3600
+    assert "api_key" not in detail["config"]
+    dataset_bytes = write_dataset(ds, tmp_path / "dataset.json").read_text()
+    assert "acme/bench-model-1" in dataset_bytes
+    assert secret not in dataset_bytes
+
+    # Web replay embeds the dataset: metadata visible, key never rendered.
+    from rubikbench.webui.server import build_replay_document
+
+    html = build_replay_document(run)
+    assert "acme/bench-model-1" in html
+    assert "api_key" not in html
+    assert secret not in html
+
+
 def test_cli_aggregate_command(mock, tmp_path, capsys):
     _, url = mock
     run = tmp_path / "run.jsonl"
