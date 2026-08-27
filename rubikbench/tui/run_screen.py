@@ -119,7 +119,7 @@ class RunScreen(Screen):
                         yield Label("max turns:", classes="info-label")
                         yield Label(f"{self.config.max_turns}", id="info-turns")
                         yield Label("max tokens:", classes="info-label")
-                        yield Label(str(self.config.max_output_tokens or "—"), id="info-tokens")
+                        yield Label(f"{self.config.max_output_tokens:,}" if self.config.max_output_tokens else "—", id="info-tokens")
                         yield Label("temperature:", classes="info-label")
                         yield Label(str(self.config.temperature if self.config.temperature is not None else "—"), id="info-temp")
                 with Vertical(classes="card"):

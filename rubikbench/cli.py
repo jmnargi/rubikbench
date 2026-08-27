@@ -188,18 +188,64 @@ def cmd_run(args: argparse.Namespace) -> int:
     # line instead of gluing onto the model's text.
     stream_state = {"active": False}
 
+    # Cumulative token counters (delta-math, same as the TUI).
+    tok_in = 0
+    tok_out = 0
+    tok_reasoning = 0
+    tok_cached = 0
+    tok_total = 0
+    usage_by_turn: dict[int, dict[str, int]] = {}
+
+    def add_usage(turn: int, usage: dict[str, int] | None) -> None:
+        nonlocal tok_in, tok_out, tok_reasoning, tok_cached, tok_total
+        if not usage:
+            return
+        prompt = usage.get("prompt", 0)
+        completion = usage.get("completion", 0)
+        reasoning = usage.get("reasoning", 0)
+        cached = usage.get("cached", 0)
+        total = usage.get("total", 0)
+        if prompt == completion == reasoning == cached == total == 0:
+            return
+        prev = usage_by_turn.get(turn, {})
+        delta_prompt = max(0, prompt - prev.get("prompt", 0))
+        delta_completion = max(0, completion - prev.get("completion", 0))
+        delta_reasoning = max(0, reasoning - prev.get("reasoning", 0))
+        delta_cached = max(0, cached - prev.get("cached", 0))
+        delta_total = max(0, total - prev.get("total", 0))
+        delta_response = max(0, delta_completion - delta_reasoning)
+        usage_by_turn[turn] = {"prompt": prompt, "completion": completion, "reasoning": reasoning, "cached": cached, "total": total}
+        tok_in += delta_prompt
+        tok_out += delta_response
+        tok_reasoning += delta_reasoning
+        tok_cached += delta_cached
+        tok_total += delta_total
+
+    def fmt(n: int) -> str:
+        return f"{n:,}"
+
+    def token_summary() -> str:
+        parts = [f"ctx={fmt(tok_in)}", f"out={fmt(tok_out)}"]
+        if tok_reasoning:
+            parts.append(f"reason={fmt(tok_reasoning)}")
+        if tok_cached:
+            parts.append(f"cached={fmt(tok_cached)}")
+        return " · ".join(parts)
+
     def end_stream_line() -> None:
         if stream_state["active"]:
             sys.stderr.write("\n")
             stream_state["active"] = False
 
     def emit(kind: str, payload: dict) -> None:
+        nonlocal tok_in, tok_out, tok_reasoning, tok_cached, tok_total
         if kind == "solve_started":
             _print_progress_line(f"[solve {payload['index'] + 1}/{cfg.num_solves}] scramble: {payload['scramble']}", not args.no_color)
         elif kind == "turn_started":
             attempt = f" (retry {payload['attempt']})" if payload["attempt"] > 1 else ""
             _print_progress_line(f"  turn {payload['turn']}: waiting for model{attempt}...", not args.no_color)
         elif kind == "stream":
+            add_usage(payload["turn"], payload.get("usage"))
             for text in (payload.get("reasoning"), payload.get("content")):
                 if not text:
                     continue
@@ -220,13 +266,28 @@ def cmd_run(args: argparse.Namespace) -> int:
             _print_progress_line(f"    {first}", not args.no_color)
         elif kind == "turn":
             end_stream_line()
+            add_usage(
+                payload["turn"],
+                {
+                    "prompt": payload.get("prompt_tokens", 0),
+                    "completion": payload.get("completion_tokens", 0),
+                    "reasoning": payload.get("reasoning_tokens", 0),
+                    "cached": payload.get("cached_tokens", 0),
+                    "total": payload.get("total_tokens", 0),
+                },
+            )
             what = f" · tools: {', '.join(payload['tool_call_names'])}" if payload["tool_call_names"] else ""
-            _print_progress_line(f"  turn {payload['turn']} · {payload['latency']:.1f}s{what}", not args.no_color)
+            _print_progress_line(
+                f"  turn {payload['turn']} · {payload['latency']:.1f}s{what} · {token_summary()}", not args.no_color
+            )
         elif kind == "solve_done":
             end_stream_line()
             s = payload["result"]
             status = "SOLVED" if s.solved else ("FAILED" if s.error else "UNSOLVED")
-            extra = f"moves={s.total_moves} turns={s.turns} tools={s.tool_calls} score={s.score}"
+            extra = (
+                f"moves={fmt(s.total_moves)} turns={s.turns} tools={s.tool_calls} "
+                f"score={s.score} · {token_summary()}"
+            )
             _print_progress_line(f"[solve {s.index + 1}/{cfg.num_solves}] {status} ({extra})", not args.no_color)
         elif kind == "log":
             end_stream_line()
